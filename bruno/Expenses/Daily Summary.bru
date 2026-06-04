@@ -1,0 +1,16 @@
+meta {
+  name: Daily Summary
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{base_url}}/expenses/summary/daily?from_date=2026-06-01&to_date=2026-06-30
+  body: none
+  auth: none
+}
+
+params:query {
+  from_date: 2026-06-01
+  to_date: 2026-06-30
+}

@@ -1,0 +1,11 @@
+meta {
+  name: Delete Expense
+  type: http
+  seq: 7
+}
+
+delete {
+  url: {{base_url}}/expenses/{{expense_id}}
+  body: none
+  auth: none
+}

@@ -30,6 +30,7 @@ The repository history/status may still reference an older Rust API and Next.js 
 - `alembic/env.py`: Alembic migration environment wired to SQLModel metadata.
 - `alembic/versions/0001_create_expenses.py`: Initial expenses table migration.
 - `tests/test_expenses_api.py`: API tests using an in-memory SQLite database.
+- `bruno/`: Bruno API collection for local manual testing.
 - `Dockerfile`: Builds the FastAPI app image using `uv`, but is not used by the current development compose setup.
 - `docker-compose.yml`: Starts only PostgreSQL for local development.
 - `.dockerignore`: Keeps local env, cache, and VCS files out of Docker build context.
@@ -61,6 +62,12 @@ Run tests:
 uv run pytest
 ```
 
+Open API collection:
+
+```sh
+bruno/
+```
+
 Run with Docker:
 
 ```sh
@@ -77,6 +84,7 @@ docker compose up -d
 - If adding dependencies, update `pyproject.toml` and refresh `uv.lock` with `uv`.
 - If adding application configuration, update `.env.example`.
 - Keep tests focused around API behavior and persistence boundaries.
+- Keep the Bruno collection in sync when adding or changing API routes.
 - Do not commit `.env`, `.env.*`, `.venv`, or `.DS_Store`.
 
 ## Current Gaps

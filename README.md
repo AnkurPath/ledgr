@@ -43,6 +43,17 @@ uv run main.py
 uv run pytest
 ```
 
+## Bruno Collection
+
+Open the `bruno/` directory in Bruno.
+
+Use the `Local` environment. It defines:
+
+- `base_url`: `http://127.0.0.1:8000`
+- `expense_id`: `1`
+
+After creating an expense, update `expense_id` to the returned `id` for get, update, replace, and delete requests.
+
 ## Migrations
 
 Create schema changes with Alembic:
