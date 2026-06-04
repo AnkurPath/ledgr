@@ -1,69 +1,84 @@
-## Ledgr
+# Ledgr
 
-Ledgr is a personal finance and bookkeeping application built with a **Next.js** web app and a **Rust (Axum)** API.
+Personal finance REST API built with FastAPI, SQLModel, Alembic, and PostgreSQL.
+The first implemented resource is daily expenses.
 
-### Features
+## Run
 
-- Track income and expenses
-- Track savings and investments
-
-### Development
-
-- **Requirements**: Node.js + npm (or pnpm/yarn), Rust toolchain (stable) + Cargo
-
-### Repo structure (expected)
-
-- `web/` - Next.js app
-- `api/` - Rust Axum server (Cargo crate)
-
-### Setup
-
-```bash
-cd web && npm install
-cd .. && cargo build
+```sh
+uv run alembic upgrade head
+uv run main.py
 ```
 
-### Run locally
+The API starts on `http://127.0.0.1:8000`.
 
-- **Web (Next.js)**:
+Interactive docs are available at `http://127.0.0.1:8000/docs`.
 
-```bash
-cd web && npm run dev
+## Local Database
+
+Start PostgreSQL with Docker Compose:
+
+```sh
+docker compose up -d
 ```
 
-- **API (Axum)**:
+The compose setup starts Postgres on `127.0.0.1:5433`.
 
-```bash
-cargo run -p ledgr
+Use this local development database URL:
+
+```sh
+export LEDGR_DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5433/ledgr
 ```
 
-### API endpoints (REST)
+Then run migrations and start the app locally:
+
+```sh
+uv run alembic upgrade head
+uv run main.py
+```
+
+## Test
+
+```sh
+uv run pytest
+```
+
+## Migrations
+
+Create schema changes with Alembic:
+
+```sh
+uv run alembic revision --autogenerate -m "describe change"
+uv run alembic upgrade head
+```
+
+Set the database connection with `LEDGR_DATABASE_URL`. By default the app uses:
+
+```sh
+postgresql+psycopg://postgres:postgres@localhost:5433/ledgr
+```
+
+## Expense Endpoints
 
 - `GET /health`
 - `POST /expenses`
 - `GET /expenses`
-- `GET /expenses/{id}`
-- `PATCH /expenses/{id}`
-- `PUT /expenses/{id}`
-- `DELETE /expenses/{id}`
+- `GET /expenses/{expense_id}`
+- `PUT /expenses/{expense_id}`
+- `PATCH /expenses/{expense_id}`
+- `DELETE /expenses/{expense_id}`
+- `GET /expenses/summary/daily`
 
-### Configuration
+Example request:
 
-If the app requires environment variables, add them to:
-
-- `web/.env.local`
-- `api/.env` (or export them in your shell)
-
-### Database (Postgres)
-
-Set `DATABASE_URL` in the repo-root `.env` (see `.env.example`).
-
-The API connects with **sqlx** (`PgPool`) and runs migrations from `api/migrations/` on startup.
-
-To apply the same SQL manually (optional):
-
-```bash
-psql "$DATABASE_URL" -f api/migrations/0001_init.sql
+```sh
+curl -X POST http://127.0.0.1:8000/expenses \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "expense_date": "2026-06-03",
+    "description": "Coffee",
+    "amount": "4.50",
+    "category": "Food",
+    "payment_method": "Card"
+  }'
 ```
-
-
