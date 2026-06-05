@@ -7,7 +7,7 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel, Session, create_engine
 
 from ledgr.app import app
-from ledgr.db import get_session
+from ledgr.core.db import get_session
 import ledgr.models  # noqa: F401
 
 

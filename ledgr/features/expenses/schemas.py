@@ -1,0 +1,57 @@
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Optional
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+class ExpenseBase(BaseModel):
+    expense_date: date = Field(..., description="Date the expense occurred.")
+    description: str = Field(..., min_length=1, max_length=200)
+    amount: Decimal = Field(..., gt=0, decimal_places=2)
+    category: Optional[str] = Field(default=None, max_length=80)
+    payment_method: Optional[str] = Field(default=None, max_length=80)
+    notes: Optional[str] = Field(default=None, max_length=500)
+
+    @field_validator("description", "category", "payment_method", "notes")
+    @classmethod
+    def strip_blank_strings(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+
+class ExpenseCreate(ExpenseBase):
+    pass
+
+
+class ExpenseUpdate(BaseModel):
+    expense_date: Optional[date] = None
+    description: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    amount: Optional[Decimal] = Field(default=None, gt=0, decimal_places=2)
+    category: Optional[str] = Field(default=None, max_length=80)
+    payment_method: Optional[str] = Field(default=None, max_length=80)
+    notes: Optional[str] = Field(default=None, max_length=500)
+
+    @field_validator("description", "category", "payment_method", "notes")
+    @classmethod
+    def strip_blank_strings(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+
+class Expense(ExpenseBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class DailyExpenseSummary(BaseModel):
+    expense_date: date
+    total_amount: Decimal
+    expense_count: int

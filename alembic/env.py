@@ -4,7 +4,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 from sqlmodel import SQLModel
 
-from ledgr.config import settings
+from ledgr.core.config import settings
 import ledgr.models  # noqa: F401
 
 

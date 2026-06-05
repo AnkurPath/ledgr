@@ -1,37 +1,4 @@
-from datetime import date, datetime
-from typing import Optional
+from ledgr.features.expenses.models import ExpenseModel
+from ledgr.features.users.models import UserAccountModel, UserCategoryModel, UserModel, UserTagModel
 
-from sqlalchemy import CheckConstraint, Column, DateTime, Text, func
-from sqlmodel import Field, SQLModel
-
-
-class ExpenseModel(SQLModel, table=True):
-    __tablename__ = "expenses"
-    __table_args__ = (
-        CheckConstraint("amount_cents > 0", name="ck_expenses_amount_cents_positive"),
-    )
-
-    id: Optional[int] = Field(default=None, primary_key=True, index=True)
-    expense_date: date = Field(index=True)
-    description: str = Field(max_length=200)
-    amount_cents: int = Field(gt=0)
-    category: Optional[str] = Field(default=None, max_length=80, index=True)
-    payment_method: Optional[str] = Field(default=None, max_length=80)
-    notes: Optional[str] = Field(default=None, sa_column=Column(Text, nullable=True))
-    created_at: Optional[datetime] = Field(
-        default=None,
-        sa_column=Column(
-            DateTime(timezone=True),
-            nullable=False,
-            server_default=func.now(),
-        )
-    )
-    updated_at: Optional[datetime] = Field(
-        default=None,
-        sa_column=Column(
-            DateTime(timezone=True),
-            nullable=False,
-            server_default=func.now(),
-            onupdate=func.now(),
-        )
-    )
+__all__ = ["ExpenseModel", "UserAccountModel", "UserCategoryModel", "UserModel", "UserTagModel"]

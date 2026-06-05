@@ -1,0 +1,11 @@
+meta {
+  name: List Expense Categories
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{base_url}}/users/{{user_id}}/setup/categories?kind=expense
+  body: none
+  auth: none
+}

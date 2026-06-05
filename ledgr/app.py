@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 
-from ledgr.expenses import router as expenses_router
+from ledgr.features.expenses import router as expenses_router
+from ledgr.features.users import router as users_router
 
 
 app = FastAPI(title="Ledgr API", version="0.1.0")
@@ -12,3 +13,4 @@ def health() -> dict[str, str]:
 
 
 app.include_router(expenses_router)
+app.include_router(users_router)

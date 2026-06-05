@@ -22,13 +22,13 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("expense_date", sa.Date(), nullable=False),
         sa.Column("description", sa.String(length=200), nullable=False),
-        sa.Column("amount_cents", sa.Integer(), nullable=False),
+        sa.Column("amount", sa.Numeric(precision=12, scale=2), nullable=False),
         sa.Column("category", sa.String(length=80), nullable=True),
         sa.Column("payment_method", sa.String(length=80), nullable=True),
         sa.Column("notes", sa.Text(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.CheckConstraint("amount_cents > 0", name="ck_expenses_amount_cents_positive"),
+        sa.CheckConstraint("amount > 0", name="ck_expenses_amount_positive"),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(op.f("ix_expenses_category"), "expenses", ["category"], unique=False)

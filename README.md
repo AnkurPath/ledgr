@@ -43,6 +43,21 @@ uv run main.py
 uv run pytest
 ```
 
+## Code Organization
+
+The backend is organized by feature so finance domains can grow independently:
+
+- `ledgr/core/`: shared infrastructure such as settings and database sessions.
+- `ledgr/features/users/`: user setup for accounts, income/expense categories, non-income/non-expense categories, and tags.
+- `ledgr/features/expenses/`: current expense CRUD and daily summaries.
+- `ledgr/features/budget_transactions/`: planned budget transaction tracking.
+- `ledgr/features/budgets/`: planned budget planning and limits.
+- `ledgr/features/mutual_funds/`: planned Indian mutual fund portfolio tracking.
+- `ledgr/features/equity_portfolio/`: planned Indian equity portfolio tracking.
+- `ledgr/features/global_portfolio/`: planned non-India/global asset tracking.
+
+Each feature should keep its own `models.py`, `schemas.py`, `router.py`, and service/query helpers. Shared cross-feature utilities belong under `ledgr/core/`. New SQLModel table classes must be imported from `ledgr/models.py` so Alembic autogenerate can see them.
+
 ## Bruno Collection
 
 Open the `bruno/` directory in Bruno.
@@ -50,8 +65,10 @@ Open the `bruno/` directory in Bruno.
 Use the `Local` environment. It defines:
 
 - `base_url`: `http://127.0.0.1:8000`
+- `user_id`: `1`
 - `expense_id`: `1`
 
+Create a user first, then update `user_id` to the returned `id` for account, category, and tag setup requests.
 After creating an expense, update `expense_id` to the returned `id` for get, update, replace, and delete requests.
 
 ## Migrations
@@ -69,9 +86,25 @@ Set the database connection with `LEDGR_DATABASE_URL`. By default the app uses:
 postgresql+psycopg://postgres:postgres@localhost:5433/ledgr
 ```
 
-## Expense Endpoints
+## API Endpoints
 
 - `GET /health`
+- `POST /users`
+- `GET /users`
+- `GET /users/{user_id}`
+- `PATCH /users/{user_id}`
+- `POST /users/{user_id}/setup/accounts`
+- `GET /users/{user_id}/setup/accounts`
+- `PATCH /users/{user_id}/setup/accounts/{account_id}`
+- `DELETE /users/{user_id}/setup/accounts/{account_id}`
+- `POST /users/{user_id}/setup/categories`
+- `GET /users/{user_id}/setup/categories`
+- `PATCH /users/{user_id}/setup/categories/{category_id}`
+- `DELETE /users/{user_id}/setup/categories/{category_id}`
+- `POST /users/{user_id}/setup/tags`
+- `GET /users/{user_id}/setup/tags`
+- `PATCH /users/{user_id}/setup/tags/{tag_id}`
+- `DELETE /users/{user_id}/setup/tags/{tag_id}`
 - `POST /expenses`
 - `GET /expenses`
 - `GET /expenses/{expense_id}`
