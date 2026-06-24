@@ -1,0 +1,16 @@
+meta {
+  name: Token
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{base_url}}/users/token
+  body: multipartForm
+  auth: none
+}
+
+body:multipart-form {
+  username: userone@example.com
+  password: userone
+}

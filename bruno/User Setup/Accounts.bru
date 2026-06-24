@@ -1,11 +1,15 @@
 meta {
-  name: List Accounts
+  name: Accounts
   type: http
-  seq: 2
+  seq: 4
 }
 
 get {
   url: {{base_url}}/users/{{user_id}}/setup/accounts
   body: none
-  auth: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
 }

@@ -1,251 +1,219 @@
+from datetime import timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi.security import OAuth2PasswordRequestForm
 from sqlmodel import Session, select
+from sqlalchemy.exc import IntegrityError
 
 from ledgr.core.db import get_session
-from ledgr.features.users.models import UserAccountModel, UserCategoryModel, UserModel, UserTagModel
+from ledgr.core.security import ACCESS_TOKEN_EXPIRE_MINUTES, create_access_token, get_password_hash, verify_password, get_current_user
+from ledgr.features.users.models import UserModel, UserAccountModel, UserCategoryModel, UserTagModel
 from ledgr.features.users.schemas import (
-    Account,
-    AccountCreate,
-    AccountUpdate,
-    Category,
-    CategoryCreate,
-    CategoryKind,
-    CategoryUpdate,
-    Tag,
-    TagCreate,
-    TagUpdate,
-    User,
-    UserCreate,
-    UserUpdate,
-)
-from ledgr.features.users.service import (
-    ensure_account_name_available,
-    ensure_category_available,
-    ensure_tag_name_available,
-    ensure_username_available,
-    fetch_account_or_404,
-    fetch_category_or_404,
-    fetch_tag_or_404,
-    fetch_user_or_404,
+    Token,
+    UserRegister,
+    UserProfile,
+    AccountCreate, AccountResponse, AccountUpdate,
+    CategoryCreate, CategoryResponse,
+    TagCreate, TagResponse
 )
 
 
 router = APIRouter(prefix="/users", tags=["users"])
 
 
-@router.post("", response_model=User, status_code=status.HTTP_201_CREATED)
-def create_user(payload: UserCreate, session: Session = Depends(get_session)) -> User:
-    ensure_username_available(session, payload.username)
+@router.post("/register", response_model=Token, status_code=status.HTTP_201_CREATED)
+def register_user(payload: UserRegister, session: Session = Depends(get_session)) -> Token:
+    hashed_password = get_password_hash(payload.password)
     user = UserModel(
-        username=payload.username,
-        display_name=payload.display_name,
-        is_active=payload.is_active,
+        email=payload.email,
+        hashed_password=hashed_password,
+        first_name=payload.first_name,
+        last_name=payload.last_name,
+        age=payload.age,
     )
     session.add(user)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User with this email already exists")
     session.refresh(user)
-    return User.model_validate(user)
+
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user.email}, expires_delta=access_token_expires
+    )
+    return Token(access_token=access_token, token_type="bearer", expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60)
 
 
-@router.get("", response_model=list[User])
-def list_users(
-    include_inactive: bool = Query(default=False),
+@router.post("/token", response_model=Token)
+def login_for_access_token(
+    form_data: OAuth2PasswordRequestForm = Depends(), session: Session = Depends(get_session)
+) -> Token:
+    user = session.exec(select(UserModel).where(UserModel.email == form_data.username)).first()
+    if not user or not verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user.email}, expires_delta=access_token_expires
+    )
+    return Token(access_token=access_token, token_type="bearer", expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60)
+
+
+@router.get("/me", response_model=UserProfile)
+def read_users_me(current_user: UserModel = Depends(get_current_user)) -> UserProfile:
+    return UserProfile(
+        email=current_user.email,
+        display_name=current_user.first_name + " " + current_user.last_name,
+        is_active=current_user.is_active,
+        created_at=current_user.created_at,
+        updated_at=current_user.updated_at,
+    )
+
+
+@router.get("/{user_id}/setup/accounts", response_model=list[AccountResponse])
+def list_accounts(
+    user_id: int,
     session: Session = Depends(get_session),
-) -> list[User]:
-    statement = select(UserModel).order_by(UserModel.username)
-    if not include_inactive:
-        statement = statement.where(UserModel.is_active == True)  # noqa: E712
-    return [User.model_validate(user) for user in session.exec(statement).all()]
+    current_user: UserModel = Depends(get_current_user)
+) -> list[UserAccountModel]:
+    if user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to access this user's accounts")
+    statement = select(UserAccountModel).where(UserAccountModel.user_id == user_id)
+    return list(session.exec(statement).all())
 
 
-@router.get("/{user_id}", response_model=User)
-def get_user(user_id: int, session: Session = Depends(get_session)) -> User:
-    return User.model_validate(fetch_user_or_404(session, user_id))
-
-
-@router.patch("/{user_id}", response_model=User)
-def update_user(user_id: int, payload: UserUpdate, session: Session = Depends(get_session)) -> User:
-    user = fetch_user_or_404(session, user_id)
-    values = payload.model_dump(exclude_unset=True)
-    if "username" in values:
-        ensure_username_available(session, values["username"], user_id=user_id)
-    for field, value in values.items():
-        setattr(user, field, value)
-    session.commit()
-    session.refresh(user)
-    return User.model_validate(user)
-
-
-@router.post("/{user_id}/setup/accounts", response_model=Account, status_code=status.HTTP_201_CREATED)
-def create_account(user_id: int, payload: AccountCreate, session: Session = Depends(get_session)) -> Account:
-    fetch_user_or_404(session, user_id)
-    ensure_account_name_available(session, user_id, payload.name)
+@router.post("/{user_id}/setup/accounts", response_model=AccountResponse, status_code=status.HTTP_201_CREATED)
+def create_account(
+    user_id: int,
+    payload: AccountCreate,
+    session: Session = Depends(get_session),
+    current_user: UserModel = Depends(get_current_user)
+) -> UserAccountModel:
+    if user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to create accounts for this user")
+        
     account = UserAccountModel(
         user_id=user_id,
         name=payload.name,
         account_type=payload.account_type,
-        opening_balance=payload.opening_balance,
-        is_active=payload.is_active,
+        opening_balance=payload.opening_balance
     )
     session.add(account)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Account name already exists for this user")
     session.refresh(account)
-    return Account.model_validate(account)
+    return account
 
 
-@router.get("/{user_id}/setup/accounts", response_model=list[Account])
-def list_accounts(
-    user_id: int,
-    include_inactive: bool = Query(default=False),
-    session: Session = Depends(get_session),
-) -> list[Account]:
-    fetch_user_or_404(session, user_id)
-    statement = select(UserAccountModel).where(UserAccountModel.user_id == user_id).order_by(UserAccountModel.name)
-    if not include_inactive:
-        statement = statement.where(UserAccountModel.is_active == True)  # noqa: E712
-    return [Account.model_validate(account) for account in session.exec(statement).all()]
-
-
-@router.patch("/{user_id}/setup/accounts/{account_id}", response_model=Account)
+@router.patch("/{user_id}/setup/accounts/{account_id}", response_model=AccountResponse)
 def update_account(
     user_id: int,
     account_id: int,
     payload: AccountUpdate,
     session: Session = Depends(get_session),
-) -> Account:
-    account = fetch_account_or_404(session, user_id, account_id)
+    current_user: UserModel = Depends(get_current_user)
+) -> UserAccountModel:
+    if user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to update accounts for this user")
+        
+    account = session.get(UserAccountModel, account_id)
+    if not account or account.user_id != user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+        
     values = payload.model_dump(exclude_unset=True)
-    if "name" in values:
-        ensure_account_name_available(session, user_id, values["name"], account_id=account_id)
     for field, value in values.items():
         setattr(account, field, value)
-    session.commit()
+        
+    session.add(account)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Account name already exists for this user")
     session.refresh(account)
-    return Account.model_validate(account)
+    return account
 
 
-@router.delete("/{user_id}/setup/accounts/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_account(user_id: int, account_id: int, session: Session = Depends(get_session)) -> Response:
-    account = fetch_account_or_404(session, user_id, account_id)
-    session.delete(account)
-    session.commit()
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
-@router.post("/{user_id}/setup/categories", response_model=Category, status_code=status.HTTP_201_CREATED)
-def create_category(user_id: int, payload: CategoryCreate, session: Session = Depends(get_session)) -> Category:
-    fetch_user_or_404(session, user_id)
-    ensure_category_available(session, user_id, payload.kind.value, payload.name)
-    category = UserCategoryModel(
-        user_id=user_id,
-        kind=payload.kind.value,
-        name=payload.name,
-        is_active=payload.is_active,
-    )
-    session.add(category)
-    session.commit()
-    session.refresh(category)
-    return Category.model_validate(category)
-
-
-@router.get("/{user_id}/setup/categories", response_model=list[Category])
+@router.get("/{user_id}/setup/categories", response_model=list[CategoryResponse])
 def list_categories(
     user_id: int,
-    kind: Optional[CategoryKind] = Query(default=None),
-    include_inactive: bool = Query(default=False),
+    kind: Optional[str] = Query(default=None),
     session: Session = Depends(get_session),
-) -> list[Category]:
-    fetch_user_or_404(session, user_id)
-    statement = select(UserCategoryModel).where(UserCategoryModel.user_id == user_id).order_by(
-        UserCategoryModel.kind,
-        UserCategoryModel.name,
-    )
+    current_user: UserModel = Depends(get_current_user)
+) -> list[UserCategoryModel]:
+    if user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to access this user's categories")
+    statement = select(UserCategoryModel).where(UserCategoryModel.user_id == user_id)
     if kind is not None:
-        statement = statement.where(UserCategoryModel.kind == kind.value)
-    if not include_inactive:
-        statement = statement.where(UserCategoryModel.is_active == True)  # noqa: E712
-    return [Category.model_validate(category) for category in session.exec(statement).all()]
+        statement = statement.where(UserCategoryModel.kind == kind)
+    return list(session.exec(statement).all())
 
 
-@router.patch("/{user_id}/setup/categories/{category_id}", response_model=Category)
-def update_category(
+@router.post("/{user_id}/setup/categories", response_model=CategoryResponse, status_code=status.HTTP_201_CREATED)
+def create_category(
     user_id: int,
-    category_id: int,
-    payload: CategoryUpdate,
+    payload: CategoryCreate,
     session: Session = Depends(get_session),
-) -> Category:
-    category = fetch_category_or_404(session, user_id, category_id)
-    values = payload.model_dump(exclude_unset=True)
-    next_kind = values.get("kind", category.kind)
-    if isinstance(next_kind, CategoryKind):
-        next_kind = next_kind.value
-    next_name = values.get("name", category.name)
-    if "kind" in values or "name" in values:
-        ensure_category_available(session, user_id, next_kind, next_name, category_id=category_id)
-    if "kind" in values and isinstance(values["kind"], CategoryKind):
-        values["kind"] = values["kind"].value
-    for field, value in values.items():
-        setattr(category, field, value)
-    session.commit()
+    current_user: UserModel = Depends(get_current_user)
+) -> UserCategoryModel:
+    if user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to create categories for this user")
+        
+    category = UserCategoryModel(
+        user_id=user_id,
+        kind=payload.kind,
+        name=payload.name
+    )
+    session.add(category)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Category already exists for this user")
     session.refresh(category)
-    return Category.model_validate(category)
+    return category
 
 
-@router.delete("/{user_id}/setup/categories/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_category(user_id: int, category_id: int, session: Session = Depends(get_session)) -> Response:
-    category = fetch_category_or_404(session, user_id, category_id)
-    session.delete(category)
-    session.commit()
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
-@router.post("/{user_id}/setup/tags", response_model=Tag, status_code=status.HTTP_201_CREATED)
-def create_tag(user_id: int, payload: TagCreate, session: Session = Depends(get_session)) -> Tag:
-    fetch_user_or_404(session, user_id)
-    ensure_tag_name_available(session, user_id, payload.name)
-    tag = UserTagModel(user_id=user_id, name=payload.name, is_active=payload.is_active)
-    session.add(tag)
-    session.commit()
-    session.refresh(tag)
-    return Tag.model_validate(tag)
-
-
-@router.get("/{user_id}/setup/tags", response_model=list[Tag])
+@router.get("/{user_id}/setup/tags", response_model=list[TagResponse])
 def list_tags(
     user_id: int,
-    include_inactive: bool = Query(default=False),
     session: Session = Depends(get_session),
-) -> list[Tag]:
-    fetch_user_or_404(session, user_id)
-    statement = select(UserTagModel).where(UserTagModel.user_id == user_id).order_by(UserTagModel.name)
-    if not include_inactive:
-        statement = statement.where(UserTagModel.is_active == True)  # noqa: E712
-    return [Tag.model_validate(tag) for tag in session.exec(statement).all()]
+    current_user: UserModel = Depends(get_current_user)
+) -> list[UserTagModel]:
+    if user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to access this user's tags")
+    statement = select(UserTagModel).where(UserTagModel.user_id == user_id)
+    return list(session.exec(statement).all())
 
 
-@router.patch("/{user_id}/setup/tags/{tag_id}", response_model=Tag)
-def update_tag(
+@router.post("/{user_id}/setup/tags", response_model=TagResponse, status_code=status.HTTP_201_CREATED)
+def create_tag(
     user_id: int,
-    tag_id: int,
-    payload: TagUpdate,
+    payload: TagCreate,
     session: Session = Depends(get_session),
-) -> Tag:
-    tag = fetch_tag_or_404(session, user_id, tag_id)
-    values = payload.model_dump(exclude_unset=True)
-    if "name" in values:
-        ensure_tag_name_available(session, user_id, values["name"], tag_id=tag_id)
-    for field, value in values.items():
-        setattr(tag, field, value)
-    session.commit()
+    current_user: UserModel = Depends(get_current_user)
+) -> UserTagModel:
+    if user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to create tags for this user")
+        
+    tag = UserTagModel(
+        user_id=user_id,
+        name=payload.name
+    )
+    session.add(tag)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Tag already exists for this user")
     session.refresh(tag)
-    return Tag.model_validate(tag)
-
-
-@router.delete("/{user_id}/setup/tags/{tag_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_tag(user_id: int, tag_id: int, session: Session = Depends(get_session)) -> Response:
-    tag = fetch_tag_or_404(session, user_id, tag_id)
-    session.delete(tag)
-    session.commit()
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return tag

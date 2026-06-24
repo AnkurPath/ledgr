@@ -2,27 +2,36 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Numeric, UniqueConstraint, func
+from sqlalchemy import CheckConstraint, Column, DateTime, Numeric, UniqueConstraint, func
 from sqlmodel import Field, SQLModel
 
 
 class UserModel(SQLModel, table=True):
     __tablename__ = "users"
-    __table_args__ = (
-        UniqueConstraint("username", name="uq_users_username"),
-    )
 
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
-    username: str = Field(max_length=120, index=True)
-    display_name: Optional[str] = Field(default=None, max_length=120)
+    email: str = Field(max_length=120, unique=True, index=True)
+    hashed_password: str = Field(max_length=255, nullable=False)
+    first_name: Optional[str] = Field(default=None, max_length=80)
+    last_name: Optional[str] = Field(default=None, max_length=80)
+    age: Optional[int] = Field(default=None, ge=0)
     is_active: bool = Field(default=True)
     created_at: Optional[datetime] = Field(
         default=None,
-        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()),
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+        ),
     )
     updated_at: Optional[datetime] = Field(
         default=None,
-        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()),
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+            onupdate=func.now(),
+        ),
     )
 
 
@@ -33,18 +42,27 @@ class UserAccountModel(SQLModel, table=True):
     )
 
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
-    user_id: int = Field(sa_column=Column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True))
+    user_id: int = Field(foreign_key="users.id", index=True, nullable=False)
     name: str = Field(max_length=120, index=True)
     account_type: Optional[str] = Field(default=None, max_length=80)
     opening_balance: Decimal = Field(default=Decimal("0.00"), sa_column=Column(Numeric(14, 2), nullable=False))
-    is_active: bool = Field(default=True)
+    is_active: bool = Field(default=True, nullable=False)
     created_at: Optional[datetime] = Field(
         default=None,
-        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()),
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+        ),
     )
     updated_at: Optional[datetime] = Field(
         default=None,
-        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()),
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+            onupdate=func.now(),
+        ),
     )
 
 
@@ -59,17 +77,26 @@ class UserCategoryModel(SQLModel, table=True):
     )
 
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
-    user_id: int = Field(sa_column=Column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True))
+    user_id: int = Field(foreign_key="users.id", index=True, nullable=False)
     kind: str = Field(max_length=40, index=True)
     name: str = Field(max_length=120, index=True)
-    is_active: bool = Field(default=True)
+    is_active: bool = Field(default=True, nullable=False)
     created_at: Optional[datetime] = Field(
         default=None,
-        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()),
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+        ),
     )
     updated_at: Optional[datetime] = Field(
         default=None,
-        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()),
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+            onupdate=func.now(),
+        ),
     )
 
 
@@ -80,14 +107,23 @@ class UserTagModel(SQLModel, table=True):
     )
 
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
-    user_id: int = Field(sa_column=Column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True))
+    user_id: int = Field(foreign_key="users.id", index=True, nullable=False)
     name: str = Field(max_length=80, index=True)
-    is_active: bool = Field(default=True)
+    is_active: bool = Field(default=True, nullable=False)
     created_at: Optional[datetime] = Field(
         default=None,
-        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()),
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+        ),
     )
     updated_at: Optional[datetime] = Field(
         default=None,
-        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()),
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+            onupdate=func.now(),
+        ),
     )

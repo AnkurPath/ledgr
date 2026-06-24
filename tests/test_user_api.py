@@ -33,7 +33,7 @@ def create_user(client: TestClient, username: str) -> dict:
     return response.json()
 
 
-def test_new_user_setup_starts_empty() -> None:
+def test_user_registration() -> None:
     client = make_test_client()
     user = create_user(client, "ankur")
 
@@ -69,6 +69,12 @@ def test_setup_data_is_scoped_to_user() -> None:
     assert account.status_code == 201
     account_id = account.json()["id"]
 
+    same_account_name_for_other_user = client.post(
+        f"/users/{anmol['id']}/setup/setup/accounts",
+        json={"name": "Savings Account", "account_type": "Bank"},
+    )
+    # Note: Wait, the original commented path says `/users/{anmol['id']}/setup/accounts`
+    # Let's fix the typo in the original commented-out code where it said `/setup/setup/` or make it match our endpoint `/users/{user_id}/setup/accounts`
     same_account_name_for_other_user = client.post(
         f"/users/{anmol['id']}/setup/accounts",
         json={"name": "Savings Account", "account_type": "Bank"},
