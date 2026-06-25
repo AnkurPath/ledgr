@@ -44,6 +44,7 @@ class AccountCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
     account_type: Optional[str] = Field(default=None, max_length=80)
     opening_balance: Decimal = Field(default=Decimal("0.00"))
+    currency: CurrencyEnum = Field(default=CurrencyEnum.INR)
 
 
 class AccountResponse(BaseModel):
@@ -52,6 +53,10 @@ class AccountResponse(BaseModel):
     name: str
     account_type: Optional[str] = None
     opening_balance: Decimal
+    current_balance: Decimal
+    currency: CurrencyEnum
+    created_at: datetime
+    updated_at: datetime
     is_active: bool
 
 
@@ -59,7 +64,6 @@ class AccountUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=120)
     account_type: Optional[str] = Field(default=None, max_length=80)
     opening_balance: Optional[Decimal] = None
-
 
 class CategoryCreate(BaseModel):
     kind: str = Field(..., min_length=1, max_length=40)

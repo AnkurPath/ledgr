@@ -1,0 +1,24 @@
+meta {
+  name: Update Account
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{base_url}}/users/{{user_id}}/setup/accounts/{{account_id}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "name": "HDFC Bank",
+    "account_type": "Salary",
+    "opening_balance": 100
+  }
+  
+}

@@ -1,0 +1,22 @@
+meta {
+  name: Add Categories
+  type: http
+  seq: 8
+}
+
+post {
+  url: {{base_url}}/users/{{user_id}}/setup/categories
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "kind": "Expense",
+    "name": "Personal"
+  }
+}

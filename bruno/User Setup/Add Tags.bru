@@ -1,0 +1,21 @@
+meta {
+  name: Add Tags
+  type: http
+  seq: 10
+}
+
+post {
+  url: {{base_url}}/users/{{user_id}}/setup/tags
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "name": "needs"
+  }
+}

@@ -76,25 +76,23 @@ def read_users_me(current_user: UserModel = Depends(get_current_user)) -> UserPr
     )
 
 
-@router.get("/{user_id}/setup/accounts", response_model=list[AccountResponse])
+@router.get("/setup/accounts", response_model=list[AccountResponse])
 def list_accounts(
-    user_id: int,
     session: Session = Depends(get_session),
     current_user: UserModel = Depends(get_current_user)
 ) -> list[UserAccountModel]:
-    if user_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to access this user's accounts")
+    user_id = current_user.id
     statement = select(UserAccountModel).where(UserAccountModel.user_id == user_id)
     return list(session.exec(statement).all())
 
 
-@router.post("/{user_id}/setup/accounts", response_model=AccountResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/setup/accounts", response_model=AccountResponse, status_code=status.HTTP_201_CREATED)
 def create_account(
-    user_id: int,
     payload: AccountCreate,
     session: Session = Depends(get_session),
     current_user: UserModel = Depends(get_current_user)
 ) -> UserAccountModel:
+    user_id = current_user.id   
     if user_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to create accounts for this user")
         
@@ -102,7 +100,9 @@ def create_account(
         user_id=user_id,
         name=payload.name,
         account_type=payload.account_type,
-        opening_balance=payload.opening_balance
+        opening_balance=payload.opening_balance,
+        current_balance=payload.opening_balance,
+        currency=payload.currency
     )
     session.add(account)
     try:
@@ -114,17 +114,14 @@ def create_account(
     return account
 
 
-@router.patch("/{user_id}/setup/accounts/{account_id}", response_model=AccountResponse)
+@router.patch("/setup/accounts/{account_id}", response_model=AccountResponse)
 def update_account(
-    user_id: int,
     account_id: int,
     payload: AccountUpdate,
     session: Session = Depends(get_session),
     current_user: UserModel = Depends(get_current_user)
 ) -> UserAccountModel:
-    if user_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to update accounts for this user")
-        
+    user_id = current_user.id        
     account = session.get(UserAccountModel, account_id)
     if not account or account.user_id != user_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
@@ -143,31 +140,26 @@ def update_account(
     return account
 
 
-@router.get("/{user_id}/setup/categories", response_model=list[CategoryResponse])
+@router.get("/setup/categories", response_model=list[CategoryResponse])
 def list_categories(
-    user_id: int,
     kind: Optional[str] = Query(default=None),
     session: Session = Depends(get_session),
     current_user: UserModel = Depends(get_current_user)
 ) -> list[UserCategoryModel]:
-    if user_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to access this user's categories")
+    user_id = current_user.id
     statement = select(UserCategoryModel).where(UserCategoryModel.user_id == user_id)
     if kind is not None:
         statement = statement.where(UserCategoryModel.kind == kind)
     return list(session.exec(statement).all())
 
 
-@router.post("/{user_id}/setup/categories", response_model=CategoryResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/setup/categories", response_model=CategoryResponse, status_code=status.HTTP_201_CREATED)
 def create_category(
-    user_id: int,
     payload: CategoryCreate,
     session: Session = Depends(get_session),
     current_user: UserModel = Depends(get_current_user)
 ) -> UserCategoryModel:
-    if user_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to create categories for this user")
-        
+    user_id = current_user.id    
     category = UserCategoryModel(
         user_id=user_id,
         kind=payload.kind,
@@ -183,28 +175,23 @@ def create_category(
     return category
 
 
-@router.get("/{user_id}/setup/tags", response_model=list[TagResponse])
+@router.get("/setup/tags", response_model=list[TagResponse])
 def list_tags(
-    user_id: int,
     session: Session = Depends(get_session),
     current_user: UserModel = Depends(get_current_user)
 ) -> list[UserTagModel]:
-    if user_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to access this user's tags")
+    user_id = current_user.id
     statement = select(UserTagModel).where(UserTagModel.user_id == user_id)
     return list(session.exec(statement).all())
 
 
-@router.post("/{user_id}/setup/tags", response_model=TagResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/setup/tags", response_model=TagResponse, status_code=status.HTTP_201_CREATED)
 def create_tag(
-    user_id: int,
     payload: TagCreate,
     session: Session = Depends(get_session),
     current_user: UserModel = Depends(get_current_user)
 ) -> UserTagModel:
-    if user_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to create tags for this user")
-        
+    user_id = current_user.id   
     tag = UserTagModel(
         user_id=user_id,
         name=payload.name

@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import CheckConstraint, Column, DateTime, Numeric, UniqueConstraint, func
-from sqlmodel import Field, SQLModel
+from sqlmodel import Field, SQLModel, String
 
 
 class UserModel(SQLModel, table=True):
@@ -46,6 +46,8 @@ class UserAccountModel(SQLModel, table=True):
     name: str = Field(max_length=120, index=True)
     account_type: Optional[str] = Field(default=None, max_length=80)
     opening_balance: Decimal = Field(default=Decimal("0.00"), sa_column=Column(Numeric(14, 2), nullable=False))
+    current_balance: Decimal = Field(default=Decimal("0.00"), sa_column=Column(Numeric(14, 2), nullable=False))
+    currency: str = Field(default="INR", max_length=3, sa_column=Column(String(3), nullable=False))
     is_active: bool = Field(default=True, nullable=False)
     created_at: Optional[datetime] = Field(
         default=None,
