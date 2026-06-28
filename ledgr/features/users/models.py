@@ -109,7 +109,8 @@ class TagModel(SQLModel, table=True):
     )
 
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
-    user_id: int = Field(foreign_key="users.id", index=True, nullable=False)
+    user_id: Optional[int] = Field(default=None, foreign_key="users.id", index=True, nullable=True)
+    is_global: bool = Field(default=False, nullable=False) 
     name: str = Field(max_length=80, index=True)
     color: Optional[str] = Field(default=None, max_length=7)  # Hex color code
     is_active: bool = Field(default=True, nullable=False)

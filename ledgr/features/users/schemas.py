@@ -12,6 +12,13 @@ class CurrencyEnum(str, Enum):
     INR = "INR"
     # TODO: Add more currencies as needed
 
+
+class CategoryKindEnum(str, Enum):
+    INCOME = "income"
+    EXPENSE = "expense"
+    TRANSFER = "transfer"
+
+
 class UserRegister(BaseModel):
     email: EmailStr = Field(..., min_length=5, max_length=255, description="Email will be used as username")
     password: str = Field(..., min_length=4, max_length=128)
@@ -68,16 +75,25 @@ class AccountUpdate(BaseModel):
 
     
 class CategoryCreate(BaseModel):
-    kind: str = Field(..., min_length=1, max_length=40)
+    kind: CategoryKindEnum
     name: str = Field(..., min_length=1, max_length=120)
 
 
 class CategoryResponse(BaseModel):
     id: int
-    user_id: int
-    kind: str
+    user_id: Optional[int] = None
+    is_global: bool
+    kind: CategoryKindEnum
     name: str
     is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class CategoryGroupsResponse(BaseModel):
+    income: list[CategoryResponse] = Field(default_factory=list)
+    expense: list[CategoryResponse] = Field(default_factory=list)
+    transfer: list[CategoryResponse] = Field(default_factory=list)
 
 
 class TagCreate(BaseModel):
@@ -91,3 +107,24 @@ class TagResponse(BaseModel):
     name: str
     is_active: bool
     color: Optional[str] = Field(default=None, max_length=7)  # Hex color code
+    created_at: datetime
+    updated_at: datetime
+
+
+class GoalCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    target_amount: Decimal
+    current_amount: Decimal = Field(default=Decimal("0.00"))
+    target_date: Optional[datetime] = None
+
+
+class GoalResponse(BaseModel):
+    id: int
+    user_id: int
+    name: str
+    target_amount: Decimal
+    current_amount: Decimal
+    target_date: Optional[datetime] = None
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime

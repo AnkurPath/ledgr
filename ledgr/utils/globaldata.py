@@ -1,6 +1,5 @@
 from sqlmodel import Session, select
-
-from ledgr.features.users.models import CategoryModel
+from ledgr.features.users.models import CategoryModel, TagModel
 
 DEFAULT_CATEGORIES = [
     # INCOME
@@ -30,20 +29,30 @@ DEFAULT_CATEGORIES = [
     {"category": "expense", "name": "Mess"},
     {"category": "expense", "name": "Personal"},
     
-    # TRANSFER (Combines your Non-Income / Non-Expense)
+    # TRANSFER
     {"category": "transfer", "name": "A/C Transfer"},
     {"category": "transfer", "name": "Credit Card"},
     {"category": "transfer", "name": "Business"},
     {"category": "transfer", "name": "Investments"},
-    {"category": "transfer", "name": "Cash Transfer"},
+    {"category": "transfer", "name": "Cash Withdrawal"},
     {"category": "transfer", "name": "Refund"},
     {"category": "transfer", "name": "Return"},
 ]
 
+DEFAULT_TAGS = [
+    {"name": "Cash", "color": "#85BB65"},
+    {"name": "Family", "color": "#FFB6C1"},
+    {"name": "Education", "color": "#87CEEB"},
+    {"name": "Friends", "color": "#FFD700"},
+    {"name": "Office", "color": "#778899"},
+    {"name": "Self", "color": "#9370DB"},
+    {"name": "Needs", "color": "#FF6347"},
+    {"name": "Wants", "color": "#FFA07A"},
+    {"name": "Investments", "color": "#4682B4"},
+]
+
+
 def seed_global_categories(session: Session):
-    """Run this once on application startup or via CLI"""
-    
-    # Check if they already exist to prevent duplicates on server restarts
     existing = session.exec(select(CategoryModel).where(CategoryModel.is_global == True)).first()
     if existing:
         print("Global categories already seeded.")
@@ -51,12 +60,37 @@ def seed_global_categories(session: Session):
 
     for cat_data in DEFAULT_CATEGORIES:
         category = CategoryModel(
-            user_id=None,          # It doesn't belong to any specific user
-            is_global=True,        # Mark it as a system category
-            kind=cat_data["category"],
+            user_id=None,          
+            is_global=True,        
+            kind=cat_data["category"],  # Corrected from 'kind' to 'category'
             name=cat_data["name"]
         )
         session.add(category)
     
     session.commit()
     print("Successfully seeded global categories.")
+
+
+def seed_global_tags(session: Session):
+    existing = session.exec(select(TagModel).where(TagModel.is_global == True)).first()
+    if existing:
+        print("Global tags already seeded.")
+        return
+
+    for tag_data in DEFAULT_TAGS:
+        tag = TagModel(
+            user_id=None,
+            is_global=True,
+            name=tag_data["name"],
+            color=tag_data["color"]
+        )
+        session.add(tag)
+    
+    session.commit()
+    print("Successfully seeded global tags.")
+
+
+def seed_all_globals(session: Session):
+    """Run this single function to seed everything."""
+    seed_global_categories(session)
+    seed_global_tags(session)

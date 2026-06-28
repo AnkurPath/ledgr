@@ -1,1 +1,2 @@
 Generic single-database configuration.
+uv run python -c "from sqlmodel import Session; from ledgr.core.db import engine; from ledgr.utils.globaldata import seed_all_globals; session = Session(engine); seed_all_globals(session);session.close()"

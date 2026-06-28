@@ -20,6 +20,7 @@ def make_test_client() -> TestClient:
         poolclass=StaticPool,
     )
     SQLModel.metadata.create_all(bind=engine)
+    app.state.test_engine = engine
 
     def override_session():
         with Session(engine) as session:
@@ -113,8 +114,65 @@ def test_categories_and_tags_use_model_names_without_user_prefix() -> None:
     expense_categories = client.get("/users/setup/categories", params={"kind": "expense"}, headers=headers)
     tags = client.get("/users/setup/tags", headers=headers)
 
-    assert [item["name"] for item in expense_categories.json()] == ["Food & Drinks"]
+    grouped_categories = expense_categories.json()
+    assert [item["name"] for item in grouped_categories["expense"]] == ["Food & Drinks"]
+    assert grouped_categories["income"] == []
+    assert grouped_categories["transfer"] == []
     assert [item["name"] for item in tags.json()] == ["needs"]
+
+
+def test_categories_are_grouped_by_kind() -> None:
+    client = make_test_client()
+    token = register_user(client)
+
+    with Session(client.app.state.test_engine) as session:
+        seed_global_categories(session)
+
+    response = client.get("/users/setup/categories", headers=auth_headers(token))
+
+    assert response.status_code == 200
+    grouped = response.json()
+    assert set(grouped) == {"income", "expense", "transfer"}
+    assert [item["name"] for item in grouped["income"]] == [
+        item["name"] for item in DEFAULT_CATEGORIES if item["category"] == "income"
+    ]
+    assert [item["name"] for item in grouped["expense"]] == [
+        item["name"] for item in DEFAULT_CATEGORIES if item["category"] == "expense"
+    ]
+    assert [item["name"] for item in grouped["transfer"]] == [
+        item["name"] for item in DEFAULT_CATEGORIES if item["category"] == "transfer"
+    ]
+
+
+def test_user_cannot_create_duplicate_category() -> None:
+    client = make_test_client()
+    token = register_user(client)
+    headers = auth_headers(token)
+    payload = {"kind": "expense", "name": "Food & Drinks"}
+
+    created = client.post("/users/setup/categories", json=payload, headers=headers)
+    duplicate = client.post("/users/setup/categories", json=payload, headers=headers)
+
+    assert created.status_code == 201
+    assert duplicate.status_code == 409
+    assert duplicate.json()["detail"] == "Category already exists"
+
+
+def test_user_cannot_create_category_that_exists_globally() -> None:
+    client = make_test_client()
+    token = register_user(client)
+
+    with Session(client.app.state.test_engine) as session:
+        seed_global_categories(session)
+
+    response = client.post(
+        "/users/setup/categories",
+        json={"kind": "expense", "name": "Food & Drinks"},
+        headers=auth_headers(token),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Category already exists"
 
 
 def test_seed_global_categories_uses_category_model() -> None:

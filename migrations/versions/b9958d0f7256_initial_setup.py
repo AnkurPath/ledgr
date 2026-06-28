@@ -1,8 +1,8 @@
 """Initial Setup
 
-Revision ID: b09a7bcf8ca4
+Revision ID: b9958d0f7256
 Revises: 
-Create Date: 2026-06-28 20:56:22.487756
+Create Date: 2026-06-28 21:29:55.310710
 
 """
 from typing import Sequence, Union
@@ -13,7 +13,7 @@ import sqlmodel
 
 
 # revision identifiers, used by Alembic.
-revision: str = 'b09a7bcf8ca4'
+revision: str = 'b9958d0f7256'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -91,7 +91,8 @@ def upgrade() -> None:
     op.create_index(op.f('ix_goals_user_id'), 'goals', ['user_id'], unique=False)
     op.create_table('tags',
     sa.Column('id', sa.Integer(), nullable=False),
-    sa.Column('user_id', sa.Integer(), nullable=False),
+    sa.Column('user_id', sa.Integer(), nullable=True),
+    sa.Column('is_global', sa.Boolean(), nullable=False),
     sa.Column('name', sqlmodel.sql.sqltypes.AutoString(length=80), nullable=False),
     sa.Column('color', sqlmodel.sql.sqltypes.AutoString(length=7), nullable=True),
     sa.Column('is_active', sa.Boolean(), nullable=False),

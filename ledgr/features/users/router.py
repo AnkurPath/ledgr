@@ -14,7 +14,7 @@ from ledgr.features.users.schemas import (
     UserRegister,
     UserProfile,
     AccountCreate, AccountResponse, AccountUpdate,
-    CategoryCreate, CategoryResponse,
+    CategoryCreate, CategoryGroupsResponse, CategoryResponse,
     TagCreate, TagResponse
 )
 
@@ -145,17 +145,21 @@ def update_account(
     return account
 
 
-@router.get("/setup/categories", response_model=list[CategoryResponse])
+@router.get("/setup/categories", response_model=CategoryGroupsResponse)
 def list_categories(
     kind: Optional[str] = Query(default=None),
     session: Session = Depends(get_session),
     current_user: UserModel = Depends(get_current_user)
-) -> list[CategoryModel]:
+) -> CategoryGroupsResponse:
     user_id = current_user.id
-    statement = select(CategoryModel).where(CategoryModel.user_id == user_id)
+    statement = select(CategoryModel).where((CategoryModel.user_id == user_id) | (CategoryModel.is_global == True))
     if kind is not None:
         statement = statement.where(CategoryModel.kind == kind)
-    return list(session.exec(statement).all())
+    categories = list(session.exec(statement).all())
+    grouped = CategoryGroupsResponse()
+    for category in categories:
+        getattr(grouped, category.kind).append(CategoryResponse.model_validate(category, from_attributes=True))
+    return grouped
 
 
 @router.post("/setup/categories", response_model=CategoryResponse, status_code=status.HTTP_201_CREATED)
@@ -164,7 +168,17 @@ def create_category(
     session: Session = Depends(get_session),
     current_user: UserModel = Depends(get_current_user)
 ) -> CategoryModel:
-    user_id = current_user.id    
+    user_id = current_user.id
+    existing = session.exec(
+        select(CategoryModel).where(
+            CategoryModel.kind == payload.kind,
+            CategoryModel.name == payload.name,
+            (CategoryModel.user_id == user_id) | (CategoryModel.is_global == True),
+        )
+    ).first()
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Category already exists")
+
     category = CategoryModel(
         user_id=user_id,
         kind=payload.kind,
@@ -175,7 +189,7 @@ def create_category(
         session.commit()
     except IntegrityError:
         session.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Category already exists for this user")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Category already exists")
     session.refresh(category)
     return category
 
@@ -186,7 +200,7 @@ def list_tags(
     current_user: UserModel = Depends(get_current_user)
 ) -> list[TagModel]:
     user_id = current_user.id
-    statement = select(TagModel).where(TagModel.user_id == user_id)
+    statement = select(TagModel).where((TagModel.user_id == user_id) | (TagModel.is_global == True))
     return list(session.exec(statement).all())
 
 
