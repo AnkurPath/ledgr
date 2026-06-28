@@ -4,11 +4,13 @@ os.environ["LEDGR_DATABASE_URL"] = "sqlite://"
 
 from fastapi.testclient import TestClient
 from sqlalchemy.pool import StaticPool
-from sqlmodel import SQLModel, Session, create_engine
+from sqlmodel import SQLModel, Session, create_engine, select
 
+import ledgr.models  # noqa: F401
 from ledgr.app import app
 from ledgr.core.db import get_session
-import ledgr.models  # noqa: F401
+from ledgr.features.users.models import CategoryModel
+from ledgr.utils.globaldata import DEFAULT_CATEGORIES, seed_global_categories
 
 
 def make_test_client() -> TestClient:
@@ -23,105 +25,111 @@ def make_test_client() -> TestClient:
         with Session(engine) as session:
             yield session
 
+    app.dependency_overrides.clear()
     app.dependency_overrides[get_session] = override_session
     return TestClient(app)
 
 
-def create_user(client: TestClient, username: str) -> dict:
-    response = client.post("/users", json={"username": username, "display_name": username.title()})
-    assert response.status_code == 201
-    return response.json()
-
-
-def test_user_registration() -> None:
-    client = make_test_client()
-    user = create_user(client, "ankur")
-
-    accounts = client.get(f"/users/{user['id']}/setup/accounts")
-    assert accounts.status_code == 200
-    assert accounts.json() == []
-
-    categories = client.get(f"/users/{user['id']}/setup/categories")
-    assert categories.status_code == 200
-    assert categories.json() == []
-
-    tags = client.get(f"/users/{user['id']}/setup/tags")
-    assert tags.status_code == 200
-    assert tags.json() == []
-
-    removed_default_route = client.post("/user/setup/defaults")
-    assert removed_default_route.status_code == 404
-
-
-def test_setup_data_is_scoped_to_user() -> None:
-    client = make_test_client()
-    ankur = create_user(client, "ankur")
-    anmol = create_user(client, "anmol")
-
-    account = client.post(
-        f"/users/{ankur['id']}/setup/accounts",
+def register_user(client: TestClient, email: str = "ankur@example.com") -> str:
+    response = client.post(
+        "/users/register",
         json={
-            "name": "Savings Account",
-            "account_type": "Bank",
-            "opening_balance": "1500.50",
+            "email": email,
+            "password": "pass1234",
+            "first_name": "Ankur",
+            "last_name": "Test",
         },
     )
-    assert account.status_code == 201
-    account_id = account.json()["id"]
-
-    same_account_name_for_other_user = client.post(
-        f"/users/{anmol['id']}/setup/setup/accounts",
-        json={"name": "Savings Account", "account_type": "Bank"},
-    )
-    # Note: Wait, the original commented path says `/users/{anmol['id']}/setup/accounts`
-    # Let's fix the typo in the original commented-out code where it said `/setup/setup/` or make it match our endpoint `/users/{user_id}/setup/accounts`
-    same_account_name_for_other_user = client.post(
-        f"/users/{anmol['id']}/setup/accounts",
-        json={"name": "Savings Account", "account_type": "Bank"},
-    )
-    assert same_account_name_for_other_user.status_code == 201
-
-    duplicate_for_same_user = client.post(
-        f"/users/{ankur['id']}/setup/accounts",
-        json={"name": "Savings Account"},
-    )
-    assert duplicate_for_same_user.status_code == 409
-
-    ankur_accounts = client.get(f"/users/{ankur['id']}/setup/accounts")
-    assert ankur_accounts.status_code == 200
-    assert [item["name"] for item in ankur_accounts.json()] == ["Savings Account"]
-
-    anmol_accounts = client.get(f"/users/{anmol['id']}/setup/accounts")
-    assert anmol_accounts.status_code == 200
-    assert [item["name"] for item in anmol_accounts.json()] == ["Savings Account"]
-    assert anmol_accounts.json()[0]["id"] != account_id
-
-    cross_user_update = client.patch(
-        f"/users/{anmol['id']}/setup/accounts/{account_id}",
-        json={"name": "Should Not Update"},
-    )
-    assert cross_user_update.status_code == 404
+    assert response.status_code == 201
+    return response.json()["access_token"]
 
 
-def test_user_scoped_categories_and_tags() -> None:
+def auth_headers(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_register_user_returns_token_and_profile() -> None:
     client = make_test_client()
-    user = create_user(client, "ankur")
+    token = register_user(client)
+
+    profile = client.get("/users/me", headers=auth_headers(token))
+
+    assert profile.status_code == 200
+    assert profile.json()["email"] == "ankur@example.com"
+    assert profile.json()["display_name"] == "Ankur Test"
+
+
+def test_setup_resources_are_scoped_to_current_user() -> None:
+    client = make_test_client()
+    first_token = register_user(client, "first@example.com")
+    second_token = register_user(client, "second@example.com")
+
+    first_account = client.post(
+        "/users/setup/accounts",
+        json={"name": "Savings", "account_type": "Bank", "opening_balance": "1500.50"},
+        headers=auth_headers(first_token),
+    )
+    assert first_account.status_code == 201
+
+    second_account = client.post(
+        "/users/setup/accounts",
+        json={"name": "Savings", "account_type": "Bank", "opening_balance": "100.00"},
+        headers=auth_headers(second_token),
+    )
+    assert second_account.status_code == 201
+
+    duplicate = client.post(
+        "/users/setup/accounts",
+        json={"name": "Savings"},
+        headers=auth_headers(first_token),
+    )
+    assert duplicate.status_code == 409
+
+    first_accounts = client.get("/users/setup/accounts", headers=auth_headers(first_token))
+    second_accounts = client.get("/users/setup/accounts", headers=auth_headers(second_token))
+
+    assert [item["name"] for item in first_accounts.json()] == ["Savings"]
+    assert [item["name"] for item in second_accounts.json()] == ["Savings"]
+    assert first_accounts.json()[0]["id"] != second_accounts.json()[0]["id"]
+
+
+def test_categories_and_tags_use_model_names_without_user_prefix() -> None:
+    client = make_test_client()
+    token = register_user(client)
+    headers = auth_headers(token)
 
     category = client.post(
-        f"/users/{user['id']}/setup/categories",
+        "/users/setup/categories",
         json={"kind": "expense", "name": "Food & Drinks"},
+        headers=headers,
     )
     assert category.status_code == 201
-    assert category.json()["user_id"] == user["id"]
+    assert category.json()["kind"] == "expense"
 
-    tag = client.post(f"/users/{user['id']}/setup/tags", json={"name": "needs"})
+    tag = client.post("/users/setup/tags", json={"name": "needs", "color": "#00aa88"}, headers=headers)
     assert tag.status_code == 201
-    assert tag.json()["user_id"] == user["id"]
+    assert tag.json()["color"] == "#00aa88"
 
-    expense_categories = client.get(f"/users/{user['id']}/setup/categories", params={"kind": "expense"})
-    assert expense_categories.status_code == 200
+    expense_categories = client.get("/users/setup/categories", params={"kind": "expense"}, headers=headers)
+    tags = client.get("/users/setup/tags", headers=headers)
+
     assert [item["name"] for item in expense_categories.json()] == ["Food & Drinks"]
-
-    tags = client.get(f"/users/{user['id']}/setup/tags")
-    assert tags.status_code == 200
     assert [item["name"] for item in tags.json()] == ["needs"]
+
+
+def test_seed_global_categories_uses_category_model() -> None:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(bind=engine)
+
+    with Session(engine) as session:
+        seed_global_categories(session)
+        seed_global_categories(session)
+        categories = session.exec(select(CategoryModel).where(CategoryModel.is_global == True)).all()
+
+    assert len(categories) == len(DEFAULT_CATEGORIES)
+    assert {category.kind for category in categories} == {"income", "expense", "transfer"}
+    assert all(category.user_id is None for category in categories)

@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from ledgr.features.users import router as users_router
+from ledgr.features.transactions.router import router as transactions_router
 
 
 app = FastAPI(title="Ledgr API", version="0.1.0")
@@ -23,4 +24,5 @@ def health() -> dict[str, str]:
 
 app.include_router(users_router)
 
+app.include_router(transactions_router)
 

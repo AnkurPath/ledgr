@@ -6,7 +6,13 @@ from sqlalchemy import pool
 from alembic import context
 
 from sqlmodel import SQLModel
-from ledgr.models import UserModel, UserAccountModel, UserCategoryModel, UserTagModel
+from ledgr.models import (UserModel, 
+                          AccountModel, 
+                          CategoryModel, 
+                          TagModel,
+                          GoalModel, 
+                          TransactionModel 
+                          )
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

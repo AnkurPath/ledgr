@@ -4,8 +4,8 @@ meta {
   seq: 6
 }
 
-post {
-  url: {{base_url}}/users/{{user_id}}/setup/accounts/{{account_id}}
+patch {
+  url: {{base_url}}/users/setup/accounts/{{account_id}}
   body: json
   auth: bearer
 }
@@ -16,9 +16,10 @@ auth:bearer {
 
 body:json {
   {
-    "name": "HDFC Bank",
+    "name": "HDFC Bank Account Updated",
     "account_type": "Salary",
-    "opening_balance": 100
+    "opening_balance": 50,
+    "currency": "INR"
   }
   
 }

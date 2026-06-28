@@ -1,0 +1,36 @@
+meta {
+  name: Add transaction
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{base_url}}/transactions
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "date": "2026-06-27T13:43:06.783Z",
+    "merchant": "abc",
+    "product": "xyz",
+    "amount": 10,
+    "account_id": 1,
+    "transaction_type": "EXPENSE",
+    "category_id": 0,
+    "tag_id": 0,
+    "goal_id": 0,
+    "notes": "",
+    "bills": ""
+  }
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 
 from ledgr.core.db import get_session
 from ledgr.core.security import ACCESS_TOKEN_EXPIRE_MINUTES, create_access_token, get_password_hash, verify_password, get_current_user
-from ledgr.features.users.models import UserModel, UserAccountModel, UserCategoryModel, UserTagModel
+from ledgr.features.users.models import AccountModel, CategoryModel, TagModel, UserModel
 from ledgr.features.users.schemas import (
     Token,
     UserRegister,
@@ -80,9 +80,9 @@ def read_users_me(current_user: UserModel = Depends(get_current_user)) -> UserPr
 def list_accounts(
     session: Session = Depends(get_session),
     current_user: UserModel = Depends(get_current_user)
-) -> list[UserAccountModel]:
+) -> list[AccountModel]:
     user_id = current_user.id
-    statement = select(UserAccountModel).where(UserAccountModel.user_id == user_id)
+    statement = select(AccountModel).where(AccountModel.user_id == user_id)
     return list(session.exec(statement).all())
 
 
@@ -91,12 +91,12 @@ def create_account(
     payload: AccountCreate,
     session: Session = Depends(get_session),
     current_user: UserModel = Depends(get_current_user)
-) -> UserAccountModel:
+) -> AccountModel:
     user_id = current_user.id   
     if user_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to create accounts for this user")
         
-    account = UserAccountModel(
+    account = AccountModel(
         user_id=user_id,
         name=payload.name,
         account_type=payload.account_type,
@@ -120,13 +120,18 @@ def update_account(
     payload: AccountUpdate,
     session: Session = Depends(get_session),
     current_user: UserModel = Depends(get_current_user)
-) -> UserAccountModel:
+) -> AccountModel:
     user_id = current_user.id        
-    account = session.get(UserAccountModel, account_id)
+    account = session.get(AccountModel, account_id)
     if not account or account.user_id != user_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
         
     values = payload.model_dump(exclude_unset=True)
+    if "opening_balance" in values:
+        difference = values["opening_balance"] - account.opening_balance
+        new_current_balance = account.current_balance + difference
+        values["current_balance"] = new_current_balance
+
     for field, value in values.items():
         setattr(account, field, value)
         
@@ -145,11 +150,11 @@ def list_categories(
     kind: Optional[str] = Query(default=None),
     session: Session = Depends(get_session),
     current_user: UserModel = Depends(get_current_user)
-) -> list[UserCategoryModel]:
+) -> list[CategoryModel]:
     user_id = current_user.id
-    statement = select(UserCategoryModel).where(UserCategoryModel.user_id == user_id)
+    statement = select(CategoryModel).where(CategoryModel.user_id == user_id)
     if kind is not None:
-        statement = statement.where(UserCategoryModel.kind == kind)
+        statement = statement.where(CategoryModel.kind == kind)
     return list(session.exec(statement).all())
 
 
@@ -158,9 +163,9 @@ def create_category(
     payload: CategoryCreate,
     session: Session = Depends(get_session),
     current_user: UserModel = Depends(get_current_user)
-) -> UserCategoryModel:
+) -> CategoryModel:
     user_id = current_user.id    
-    category = UserCategoryModel(
+    category = CategoryModel(
         user_id=user_id,
         kind=payload.kind,
         name=payload.name
@@ -179,9 +184,9 @@ def create_category(
 def list_tags(
     session: Session = Depends(get_session),
     current_user: UserModel = Depends(get_current_user)
-) -> list[UserTagModel]:
+) -> list[TagModel]:
     user_id = current_user.id
-    statement = select(UserTagModel).where(UserTagModel.user_id == user_id)
+    statement = select(TagModel).where(TagModel.user_id == user_id)
     return list(session.exec(statement).all())
 
 
@@ -190,11 +195,12 @@ def create_tag(
     payload: TagCreate,
     session: Session = Depends(get_session),
     current_user: UserModel = Depends(get_current_user)
-) -> UserTagModel:
+) -> TagModel:
     user_id = current_user.id   
-    tag = UserTagModel(
+    tag = TagModel(
         user_id=user_id,
-        name=payload.name
+        name=payload.name,
+        color=payload.color
     )
     session.add(tag)
     try:

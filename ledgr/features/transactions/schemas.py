@@ -5,15 +5,39 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+class TransactionTypeEnum(str, Enum):
+    INCOME = "INCOME"
+    EXPENSE = "EXPENSE"
+    TRANSFER = "TRANSFER"
 
+class TransactionCreate(BaseModel):
+    date: datetime
+    merchant: Optional[str] = None
+    product: Optional[str] = None
+    amount: Decimal
+    account_id: int
+    transaction_type: TransactionTypeEnum
+    category_id: Optional[int] = None
+    tag_id: Optional[int] = None
+    goal_id: Optional[int] = None   
+    notes: Optional[str] = None
+    bills: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
-class Transaction(BaseModel):
+class TransactionResponse(BaseModel):
     id: int
     user_id: int
-    account_id: int
+    date: datetime
+    merchant: Optional[str] = None
+    product: Optional[str] = None
     amount: Decimal
-    currency: str
-    description: Optional[str] = None
-    transaction_type: str
+    account_id: int
+    transaction_type: TransactionTypeEnum
+    category_id: Optional[int] = None
+    tag_id: Optional[int] = None
+    goal_id: Optional[int] = None   
+    notes: Optional[str] = None
+    bills: Optional[str] = None
     created_at: datetime
     updated_at: datetime

@@ -64,7 +64,9 @@ class AccountUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=120)
     account_type: Optional[str] = Field(default=None, max_length=80)
     opening_balance: Optional[Decimal] = None
+    currency: Optional[CurrencyEnum] = None
 
+    
 class CategoryCreate(BaseModel):
     kind: str = Field(..., min_length=1, max_length=40)
     name: str = Field(..., min_length=1, max_length=120)
@@ -80,6 +82,7 @@ class CategoryResponse(BaseModel):
 
 class TagCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=80)
+    color: Optional[str] = Field(default=None, max_length=7)  # Hex color code
 
 
 class TagResponse(BaseModel):
@@ -87,3 +90,4 @@ class TagResponse(BaseModel):
     user_id: int
     name: str
     is_active: bool
+    color: Optional[str] = Field(default=None, max_length=7)  # Hex color code

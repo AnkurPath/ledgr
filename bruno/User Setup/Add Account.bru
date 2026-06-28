@@ -5,7 +5,7 @@ meta {
 }
 
 post {
-  url: {{base_url}}/users/{{user_id}}/setup/accounts
+  url: {{base_url}}/users/setup/accounts
   body: json
   auth: bearer
 }
@@ -18,6 +18,9 @@ body:json {
   {
     "name": "HDFC Bank",
     "account_type": "Salary",
-    "opening_balance": 10
+    "opening_balance": 100,
+    "currency": "INR"
   }
+  
+  
 }
