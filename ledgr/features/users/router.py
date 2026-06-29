@@ -13,13 +13,15 @@ from ledgr.features.users.schemas import (
     Token,
     UserRegister,
     UserProfile,
-    AccountCreate, AccountResponse, AccountUpdate,
+    AccountCreate, AccountResponse, AccountTypeEnum, AccountUpdate,
     CategoryCreate, CategoryGroupsResponse, CategoryResponse,
     TagCreate, TagResponse
 )
 
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+DEFAULT_ACCOUNT_NAMES = ("Cash", "Pending from Friends")
 
 
 @router.post("/register", response_model=Token, status_code=status.HTTP_201_CREATED)
@@ -34,6 +36,15 @@ def register_user(payload: UserRegister, session: Session = Depends(get_session)
     )
     session.add(user)
     try:
+        session.flush()
+        for account_name in DEFAULT_ACCOUNT_NAMES:
+            session.add(
+                AccountModel(
+                    user_id=user.id,
+                    name=account_name,
+                    account_type="wallet",
+                )
+            )
         session.commit()
     except IntegrityError:
         session.rollback()
@@ -102,7 +113,12 @@ def create_account(
         account_type=payload.account_type,
         opening_balance=payload.opening_balance,
         current_balance=payload.opening_balance,
-        currency=payload.currency
+        currency=payload.currency,
+        card_number=payload.card_number,
+        expiration_date=payload.expiration_date,
+        credit_limit=payload.credit_limit,
+        billing_cycle_start=payload.billing_cycle_start,
+        billing_cycle_end=payload.billing_cycle_end,
     )
     session.add(account)
     try:
@@ -127,6 +143,25 @@ def update_account(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
         
     values = payload.model_dump(exclude_unset=True)
+    next_account_type = values.get("account_type", account.account_type)
+    credit_card_fields = payload.provided_credit_card_fields()
+    if next_account_type != AccountTypeEnum.CREDIT_CARD and credit_card_fields:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Credit card fields are only allowed for credit card accounts",
+        )
+
+    if values.get("account_type") in {AccountTypeEnum.BANK_ACCOUNT, AccountTypeEnum.WALLET}:
+        values.update(
+            {
+                "card_number": None,
+                "expiration_date": None,
+                "credit_limit": None,
+                "billing_cycle_start": None,
+                "billing_cycle_end": None,
+            }
+        )
+
     if "opening_balance" in values:
         difference = values["opening_balance"] - account.opening_balance
         new_current_balance = account.current_balance + difference

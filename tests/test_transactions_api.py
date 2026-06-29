@@ -46,10 +46,25 @@ def auth_headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-def create_account(client: TestClient, token: str, opening_balance: str = "100.00") -> dict:
+def create_account(
+    client: TestClient,
+    token: str,
+    opening_balance: str = "100.00",
+    name: str = "Wallet",
+) -> dict:
     response = client.post(
         "/users/setup/accounts",
-        json={"name": "Wallet", "account_type": "Cash", "opening_balance": opening_balance},
+        json={"name": name, "account_type": "wallet", "opening_balance": opening_balance},
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 201
+    return response.json()
+
+
+def create_category(client: TestClient, token: str, kind: str, name: str) -> dict:
+    response = client.post(
+        "/users/setup/categories",
+        json={"kind": kind, "name": name},
         headers=auth_headers(token),
     )
     assert response.status_code == 201
@@ -74,7 +89,8 @@ def test_create_transactions_updates_account_balance() -> None:
         headers=headers,
     )
     assert expense.status_code == 200
-    assert expense.json()["amount"] == "25.50"
+    assert expense.json()["message"] == "Expense transaction created"
+    assert expense.json()["transactions"][0]["amount"] == "25.50"
 
     income = client.post(
         "/transactions",
@@ -88,12 +104,14 @@ def test_create_transactions_updates_account_balance() -> None:
         headers=headers,
     )
     assert income.status_code == 200
+    assert income.json()["message"] == "Income transaction created"
 
     transactions = client.get("/transactions", headers=headers)
     accounts = client.get("/users/setup/accounts", headers=headers)
+    balances = {item["name"]: item["current_balance"] for item in accounts.json()}
 
-    assert [item["transaction_type"] for item in transactions.json()] == ["EXPENSE", "INCOME"]
-    assert accounts.json()[0]["current_balance"] == "84.50"
+    assert [item["transaction_type"] for item in transactions.json()] == ["INCOME", "EXPENSE"]
+    assert balances["Wallet"] == "84.50"
 
 
 def test_expense_transaction_rejects_insufficient_funds() -> None:
@@ -116,6 +134,27 @@ def test_expense_transaction_rejects_insufficient_funds() -> None:
     assert response.json()["detail"] == "Insufficient funds in the selected account"
 
 
+def test_allows_duplicate_same_amount_transactions() -> None:
+    client = make_test_client()
+    token = register_user(client)
+    account = create_account(client, token)
+    payload = {
+        "date": "2026-06-28T10:00:00+00:00",
+        "merchant": "Coffee Bar",
+        "amount": "10.00",
+        "account_id": account["id"],
+        "transaction_type": "EXPENSE",
+    }
+
+    first = client.post("/transactions", json=payload, headers=auth_headers(token))
+    second = client.post("/transactions", json=payload, headers=auth_headers(token))
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    transactions = client.get("/transactions", headers=auth_headers(token)).json()
+    assert len(transactions) == 2
+
+
 def test_transaction_account_must_belong_to_current_user() -> None:
     client = make_test_client()
     owner_token = register_user(client, "owner@example.com")
@@ -135,3 +174,140 @@ def test_transaction_account_must_belong_to_current_user() -> None:
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Account not found or not authorized"
+
+
+def test_transfer_transaction_moves_money_between_owned_accounts() -> None:
+    client = make_test_client()
+    token = register_user(client)
+    headers = auth_headers(token)
+    source = create_account(client, token, opening_balance="100.00", name="Checking")
+    destination = create_account(client, token, opening_balance="25.00", name="Savings")
+    category = create_category(client, token, "transfer", "A/C Transfer")
+
+    response = client.post(
+        "/transactions",
+        json={
+            "date": "2026-06-28T10:00:00+00:00",
+            "amount": "40.00",
+            "source_account_id": source["id"],
+            "destination_account_id": destination["id"],
+            "transaction_type": "TRANSFER",
+            "category_id": category["id"],
+            "notes": "Move money",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["message"] == "Transfer successful"
+    assert body["amount_transferred"] == "40.00"
+    assert [item["amount"] for item in body["transactions"]] == ["-40.00", "40.00"]
+    assert [item["merchant"] for item in body["transactions"]] == ["Transfer to Savings", "Transfer from Checking"]
+
+    accounts = client.get("/users/setup/accounts", headers=headers).json()
+    balances = {account["name"]: account["current_balance"] for account in accounts}
+    assert balances["Checking"] == "60.00"
+    assert balances["Savings"] == "65.00"
+
+
+def test_transfer_rejects_same_account() -> None:
+    client = make_test_client()
+    token = register_user(client)
+    account = create_account(client, token)
+    category = create_category(client, token, "transfer", "A/C Transfer")
+
+    response = client.post(
+        "/transactions",
+        json={
+            "date": "2026-06-28T10:00:00+00:00",
+            "amount": "10.00",
+            "source_account_id": account["id"],
+            "destination_account_id": account["id"],
+            "transaction_type": "TRANSFER",
+            "category_id": category["id"],
+        },
+        headers=auth_headers(token),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Cannot transfer money to the same account"
+
+
+def test_transfer_rejects_insufficient_source_funds() -> None:
+    client = make_test_client()
+    token = register_user(client)
+    source = create_account(client, token, opening_balance="5.00", name="Checking")
+    destination = create_account(client, token, opening_balance="25.00", name="Savings")
+    category = create_category(client, token, "transfer", "A/C Transfer")
+
+    response = client.post(
+        "/transactions",
+        json={
+            "date": "2026-06-28T10:00:00+00:00",
+            "amount": "10.00",
+            "source_account_id": source["id"],
+            "destination_account_id": destination["id"],
+            "transaction_type": "TRANSFER",
+            "category_id": category["id"],
+        },
+        headers=auth_headers(token),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Insufficient funds in the source account"
+
+
+def test_transfer_accounts_must_belong_to_current_user() -> None:
+    client = make_test_client()
+    owner_token = register_user(client, "owner@example.com")
+    other_token = register_user(client, "other@example.com")
+    owner_account = create_account(client, owner_token, name="Owner")
+    other_account = create_account(client, other_token, name="Other")
+    category = create_category(client, owner_token, "transfer", "A/C Transfer")
+
+    response = client.post(
+        "/transactions",
+        json={
+            "date": "2026-06-28T10:00:00+00:00",
+            "amount": "10.00",
+            "source_account_id": owner_account["id"],
+            "destination_account_id": other_account["id"],
+            "transaction_type": "TRANSFER",
+            "category_id": category["id"],
+        },
+        headers=auth_headers(owner_token),
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Destination account not found or not authorized"
+
+
+def test_credit_card_transfer_category_creates_single_transaction_without_account_transfer() -> None:
+    client = make_test_client()
+    token = register_user(client)
+    account = create_account(client, token, opening_balance="100.00", name="Checking")
+    category = create_category(client, token, "transfer", "Credit Card")
+
+    response = client.post(
+        "/transactions",
+        json={
+            "date": "2026-06-28T10:00:00+00:00",
+            "amount": "30.00",
+            "account_id": account["id"],
+            "transaction_type": "TRANSFER",
+            "category_id": category["id"],
+        },
+        headers=auth_headers(token),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["message"] == "Transfer transaction created"
+    assert body["amount_transferred"] is None
+    assert len(body["transactions"]) == 1
+    assert body["transactions"][0]["account_id"] == account["id"]
+
+    accounts = client.get("/users/setup/accounts", headers=auth_headers(token)).json()
+    balances = {account["name"]: account["current_balance"] for account in accounts}
+    assert balances["Checking"] == "100.00"

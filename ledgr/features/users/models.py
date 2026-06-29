@@ -48,6 +48,11 @@ class AccountModel(SQLModel, table=True):
     opening_balance: Decimal = Field(default=Decimal("0.00"), sa_column=Column(Numeric(14, 2), nullable=False))
     current_balance: Decimal = Field(default=Decimal("0.00"), sa_column=Column(Numeric(14, 2), nullable=False))
     currency: str = Field(default="INR", max_length=3, sa_column=Column(String(3), nullable=False))
+    card_number: Optional[str] = Field(default=None, max_length=16, index=True)
+    expiration_date: Optional[datetime] = Field(default=None)
+    credit_limit: Optional[Decimal] = Field(default=None, sa_column=Column(Numeric(14, 2), nullable=True))
+    billing_cycle_start: Optional[int] = Field(default=None, ge=1, le=31)
+    billing_cycle_end: Optional[int] = Field(default=None, ge=1, le=31)
     is_active: bool = Field(default=True, nullable=False)
     created_at: Optional[datetime] = Field(
         default=None,
@@ -73,7 +78,7 @@ class CategoryModel(SQLModel, table=True):
     __table_args__ = (
         UniqueConstraint("user_id", "kind", "name", name="uq_categories_user_id_kind_name"),
         CheckConstraint(
-            "kind in ('income', 'expense', 'transfer')",
+            "kind in ('income', 'expense', 'transfer', 'investment', 'refund')",
             name="ck_categories_kind",
         ),
     )
@@ -144,6 +149,25 @@ class GoalModel(SQLModel, table=True):
     target_amount: Decimal = Field(sa_column=Column(Numeric(14, 2), nullable=False))
     current_amount: Decimal = Field(default=Decimal("0.00"), sa_column=Column(Numeric(14, 2), nullable=False))
     target_date: Optional[datetime] = Field(default=None)
+    is_active: bool = Field(default=True, nullable=False)
+    created_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+        ),
+    )
+    updated_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+            onupdate=func.now(),
+        ),
+    )
+
     is_active: bool = Field(default=True, nullable=False)
     created_at: Optional[datetime] = Field(
         default=None,

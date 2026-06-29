@@ -2,15 +2,12 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import CheckConstraint, Column, DateTime, Numeric, UniqueConstraint, func
+from sqlalchemy import Column, DateTime, Numeric, func
 from sqlmodel import Field, SQLModel, String
 
 
 class TransactionModel(SQLModel, table=True):
     __tablename__ = "transactions"
-    __table_args__ = (
-        UniqueConstraint("user_id", "account_id", "date", "amount", name="uq_transactions_user_account_date_amount"),
-    )
 
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
     user_id: int = Field(foreign_key="users.id", index=True, nullable=False)

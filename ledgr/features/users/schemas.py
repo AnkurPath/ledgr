@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Optional
 from datetime import datetime
 
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, Field, EmailStr, model_validator
 
 
 # Never expose user IDs or other internal identifiers in API responses
@@ -17,6 +17,14 @@ class CategoryKindEnum(str, Enum):
     INCOME = "income"
     EXPENSE = "expense"
     TRANSFER = "transfer"
+    INVESTMENT = "investment"
+    REFUND = "refund"
+
+
+class AccountTypeEnum(str, Enum):
+    BANK_ACCOUNT = "bank account"
+    CREDIT_CARD = "credit card"
+    WALLET = "wallet"
 
 
 class UserRegister(BaseModel):
@@ -49,19 +57,51 @@ class UserProfile(BaseModel):
 
 class AccountCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
-    account_type: Optional[str] = Field(default=None, max_length=80)
+    account_type: AccountTypeEnum
     opening_balance: Decimal = Field(default=Decimal("0.00"))
     currency: CurrencyEnum = Field(default=CurrencyEnum.INR)
+    card_number: Optional[str] = Field(default=None, max_length=16)
+    expiration_date: Optional[datetime] = None
+    credit_limit: Optional[Decimal] = None
+    billing_cycle_start: Optional[int] = Field(default=None, ge=1, le=31)
+    billing_cycle_end: Optional[int] = Field(default=None, ge=1, le=31)
+
+    @model_validator(mode="after")
+    def validate_fields_for_account_type(self) -> "AccountCreate":
+        credit_card_fields = {
+            "card_number": self.card_number,
+            "expiration_date": self.expiration_date,
+            "credit_limit": self.credit_limit,
+            "billing_cycle_start": self.billing_cycle_start,
+            "billing_cycle_end": self.billing_cycle_end,
+        }
+        provided_credit_card_fields = [field for field, value in credit_card_fields.items() if value is not None]
+
+        if self.account_type != AccountTypeEnum.CREDIT_CARD and provided_credit_card_fields:
+            raise ValueError("Credit card fields are only allowed for credit card accounts")
+
+        if self.account_type == AccountTypeEnum.CREDIT_CARD:
+            required_fields = {"expiration_date": self.expiration_date, "credit_limit": self.credit_limit}
+            missing_fields = [field for field, value in required_fields.items() if value is None]
+            if missing_fields:
+                raise ValueError(f"Missing required credit card fields: {', '.join(missing_fields)}")
+
+        return self
 
 
 class AccountResponse(BaseModel):
     id: int
     user_id: int
     name: str
-    account_type: Optional[str] = None
+    account_type: AccountTypeEnum
     opening_balance: Decimal
     current_balance: Decimal
     currency: CurrencyEnum
+    card_number: Optional[str] = None
+    expiration_date: Optional[datetime] = None
+    credit_limit: Optional[Decimal] = None
+    billing_cycle_start: Optional[int] = None
+    billing_cycle_end: Optional[int] = None
     created_at: datetime
     updated_at: datetime
     is_active: bool
@@ -69,9 +109,27 @@ class AccountResponse(BaseModel):
 
 class AccountUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=120)
-    account_type: Optional[str] = Field(default=None, max_length=80)
+    account_type: Optional[AccountTypeEnum] = None
     opening_balance: Optional[Decimal] = None
     currency: Optional[CurrencyEnum] = None
+    card_number: Optional[str] = Field(default=None, max_length=16)
+    expiration_date: Optional[datetime] = None
+    credit_limit: Optional[Decimal] = None
+    billing_cycle_start: Optional[int] = Field(default=None, ge=1, le=31)
+    billing_cycle_end: Optional[int] = Field(default=None, ge=1, le=31)
+
+    def provided_credit_card_fields(self) -> set[str]:
+        return {
+            field
+            for field in {
+                "card_number",
+                "expiration_date",
+                "credit_limit",
+                "billing_cycle_start",
+                "billing_cycle_end",
+            }
+            if field in self.model_fields_set
+        }
 
     
 class CategoryCreate(BaseModel):
@@ -94,6 +152,8 @@ class CategoryGroupsResponse(BaseModel):
     income: list[CategoryResponse] = Field(default_factory=list)
     expense: list[CategoryResponse] = Field(default_factory=list)
     transfer: list[CategoryResponse] = Field(default_factory=list)
+    investment: list[CategoryResponse] = Field(default_factory=list)
+    refund: list[CategoryResponse] = Field(default_factory=list)
 
 
 class TagCreate(BaseModel):

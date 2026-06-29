@@ -54,10 +54,14 @@ def test_register_user_returns_token_and_profile() -> None:
     token = register_user(client)
 
     profile = client.get("/users/me", headers=auth_headers(token))
+    accounts = client.get("/users/setup/accounts", headers=auth_headers(token))
 
     assert profile.status_code == 200
     assert profile.json()["email"] == "ankur@example.com"
     assert profile.json()["display_name"] == "Ankur Test"
+    assert accounts.status_code == 200
+    assert [account["name"] for account in accounts.json()] == ["Cash", "Pending from Friends"]
+    assert [account["current_balance"] for account in accounts.json()] == ["0.00", "0.00"]
 
 
 def test_setup_resources_are_scoped_to_current_user() -> None:
@@ -67,21 +71,21 @@ def test_setup_resources_are_scoped_to_current_user() -> None:
 
     first_account = client.post(
         "/users/setup/accounts",
-        json={"name": "Savings", "account_type": "Bank", "opening_balance": "1500.50"},
+        json={"name": "Savings", "account_type": "bank account", "opening_balance": "1500.50"},
         headers=auth_headers(first_token),
     )
     assert first_account.status_code == 201
 
     second_account = client.post(
         "/users/setup/accounts",
-        json={"name": "Savings", "account_type": "Bank", "opening_balance": "100.00"},
+        json={"name": "Savings", "account_type": "bank account", "opening_balance": "100.00"},
         headers=auth_headers(second_token),
     )
     assert second_account.status_code == 201
 
     duplicate = client.post(
         "/users/setup/accounts",
-        json={"name": "Savings"},
+        json={"name": "Savings", "account_type": "bank account"},
         headers=auth_headers(first_token),
     )
     assert duplicate.status_code == 409
@@ -89,9 +93,136 @@ def test_setup_resources_are_scoped_to_current_user() -> None:
     first_accounts = client.get("/users/setup/accounts", headers=auth_headers(first_token))
     second_accounts = client.get("/users/setup/accounts", headers=auth_headers(second_token))
 
-    assert [item["name"] for item in first_accounts.json()] == ["Savings"]
-    assert [item["name"] for item in second_accounts.json()] == ["Savings"]
-    assert first_accounts.json()[0]["id"] != second_accounts.json()[0]["id"]
+    assert [item["name"] for item in first_accounts.json()] == ["Cash", "Pending from Friends", "Savings"]
+    assert [item["name"] for item in second_accounts.json()] == ["Cash", "Pending from Friends", "Savings"]
+    assert first_accounts.json()[2]["id"] != second_accounts.json()[2]["id"]
+
+
+def test_account_model_supports_credit_card_fields() -> None:
+    client = make_test_client()
+    token = register_user(client)
+    headers = auth_headers(token)
+
+    created = client.post(
+        "/users/setup/accounts",
+        json={
+            "name": "HDFC Credit Card",
+            "account_type": "credit card",
+            "opening_balance": "2500.00",
+            "card_number": "1234567812345678",
+            "expiration_date": "2028-12-31T00:00:00+00:00",
+            "credit_limit": "100000.00",
+            "billing_cycle_start": 1,
+            "billing_cycle_end": 25,
+        },
+        headers=headers,
+    )
+
+    assert created.status_code == 201
+    body = created.json()
+    assert body["account_type"] == "credit card"
+    assert body["current_balance"] == "2500.00"
+    assert body["card_number"] == "1234567812345678"
+    assert body["credit_limit"] == "100000.00"
+    assert body["billing_cycle_start"] == 1
+    assert body["billing_cycle_end"] == 25
+
+    updated = client.patch(
+        f"/users/setup/accounts/{body['id']}",
+        json={"credit_limit": "120000.00", "billing_cycle_end": 28},
+        headers=headers,
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["credit_limit"] == "120000.00"
+    assert updated.json()["billing_cycle_end"] == 28
+
+
+def test_bank_account_and_wallet_reject_credit_card_fields() -> None:
+    client = make_test_client()
+    token = register_user(client)
+    headers = auth_headers(token)
+
+    bank_response = client.post(
+        "/users/setup/accounts",
+        json={
+            "name": "Savings",
+            "account_type": "bank account",
+            "opening_balance": "0.00",
+            "billing_cycle_end": 25,
+        },
+        headers=headers,
+    )
+    wallet_response = client.post(
+        "/users/setup/accounts",
+        json={
+            "name": "Wallet 2",
+            "account_type": "wallet",
+            "opening_balance": "0.00",
+            "credit_limit": "1000.00",
+        },
+        headers=headers,
+    )
+
+    assert bank_response.status_code == 422
+    assert wallet_response.status_code == 422
+
+
+def test_credit_card_requires_credit_limit_and_expiration_date() -> None:
+    client = make_test_client()
+    token = register_user(client)
+
+    response = client.post(
+        "/users/setup/accounts",
+        json={"name": "Incomplete Card", "account_type": "credit card", "opening_balance": "0.00"},
+        headers=auth_headers(token),
+    )
+
+    assert response.status_code == 422
+
+
+def test_changing_credit_card_to_wallet_clears_credit_card_fields() -> None:
+    client = make_test_client()
+    token = register_user(client)
+    headers = auth_headers(token)
+    created = client.post(
+        "/users/setup/accounts",
+        json={
+            "name": "HDFC Credit Card",
+            "account_type": "credit card",
+            "opening_balance": "2500.00",
+            "expiration_date": "2028-12-31T00:00:00+00:00",
+            "credit_limit": "100000.00",
+            "billing_cycle_end": 25,
+        },
+        headers=headers,
+    )
+    assert created.status_code == 201
+
+    updated = client.patch(
+        f"/users/setup/accounts/{created.json()['id']}",
+        json={"account_type": "wallet"},
+        headers=headers,
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["account_type"] == "wallet"
+    assert updated.json()["expiration_date"] is None
+    assert updated.json()["credit_limit"] is None
+    assert updated.json()["billing_cycle_end"] is None
+
+
+def test_account_type_must_be_supported_value() -> None:
+    client = make_test_client()
+    token = register_user(client)
+
+    response = client.post(
+        "/users/setup/accounts",
+        json={"name": "Brokerage", "account_type": "investment", "opening_balance": "0.00"},
+        headers=auth_headers(token),
+    )
+
+    assert response.status_code == 422
 
 
 def test_categories_and_tags_use_model_names_without_user_prefix() -> None:
@@ -132,7 +263,7 @@ def test_categories_are_grouped_by_kind() -> None:
 
     assert response.status_code == 200
     grouped = response.json()
-    assert set(grouped) == {"income", "expense", "transfer"}
+    assert set(grouped) == {"income", "expense", "transfer", "investment", "refund"}
     assert [item["name"] for item in grouped["income"]] == [
         item["name"] for item in DEFAULT_CATEGORIES if item["category"] == "income"
     ]
@@ -141,6 +272,12 @@ def test_categories_are_grouped_by_kind() -> None:
     ]
     assert [item["name"] for item in grouped["transfer"]] == [
         item["name"] for item in DEFAULT_CATEGORIES if item["category"] == "transfer"
+    ]
+    assert [item["name"] for item in grouped["investment"]] == [
+        item["name"] for item in DEFAULT_CATEGORIES if item["category"] == "investment"
+    ]
+    assert [item["name"] for item in grouped["refund"]] == [
+        item["name"] for item in DEFAULT_CATEGORIES if item["category"] == "refund"
     ]
 
 
@@ -189,5 +326,5 @@ def test_seed_global_categories_uses_category_model() -> None:
         categories = session.exec(select(CategoryModel).where(CategoryModel.is_global == True)).all()
 
     assert len(categories) == len(DEFAULT_CATEGORIES)
-    assert {category.kind for category in categories} == {"income", "expense", "transfer"}
+    assert {category.kind for category in categories} == {"income", "expense", "transfer", "investment", "refund"}
     assert all(category.user_id is None for category in categories)
