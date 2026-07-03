@@ -1,103 +1,128 @@
 # Codex Guide
 
-This file is a working guide for LLM agents editing this repository.
+This guide describes the current repository shape and recent behavior changes so agents can make safe, focused updates.
 
 ## Project Snapshot
 
-`ledgr` is a Python FastAPI backend for a personal finance application.
+`ledgr` is a FastAPI backend with a Vite + React frontend.
 
-- Runtime: Python 3.9, pinned by `.python-version`.
-- Package metadata: `pyproject.toml`.
-- Lockfile/tooling: `uv.lock`, generated for `uv`.
-- Entry point: `main.py`, which runs `ledgr.app:app` with Uvicorn.
-- Persistence: PostgreSQL through SQLModel/SQLAlchemy.
-- Migrations: Alembic in `alembic/`.
-- First domain resource: daily expenses.
-- Dependencies: FastAPI, SQLModel, psycopg, Alembic, and Uvicorn. Dev dependencies include pytest and httpx.
-- Container runtime: `docker-compose.yml` for local PostgreSQL.
+- Backend runtime: Python 3.9 (`.python-version`)
+- Backend package + deps: `pyproject.toml`, `uv.lock`
+- API entry point: `main.py` -> `ledgr.app:app`
+- Database: SQLModel + SQLAlchemy, local PostgreSQL via `docker-compose.yml`
+- Migrations: Alembic under `migrations/`
+- Frontend: Vite React TypeScript app under `frontend/`
+- Global reference data: categories/tags are seeded on API startup (non-test mode)
 
-The repository history/status may still reference an older Rust API and Next.js web app, but those files are not present in the current workspace. Do not assume `Cargo.toml`, `api/`, or `web/` exist unless they are restored.
+## Key Paths
 
-## Files
+- `ledgr/app.py`: FastAPI app setup (`/health`, users router, transactions router) + global data seeding
+- `ledgr/utils/globaldata.py`: default global categories/tags + seeding helpers
+- `ledgr/features/users/`: auth, profile, accounts, categories, tags, goals
+- `ledgr/features/transactions/`: transaction create/list/update behavior
+- `tests/test_user_api.py`: user + setup API coverage
+- `tests/test_transactions_api.py`: transaction API coverage
+- `frontend/src/App.tsx`: auth + dashboard shell + workspace sections
+- `frontend/src/api.ts`: frontend API client methods
+- `frontend/src/types.ts`: frontend API types
+- `frontend/src/styles.css`: frontend styling
 
-- `main.py`: Python executable entry point for the API server.
-- `ledgr/app.py`: FastAPI app, health endpoint, router registration.
-- `ledgr/core/config.py`: Environment-backed settings.
-- `ledgr/core/db.py`: SQLModel/SQLAlchemy engine and request session dependency.
-- `ledgr/features/users/`: User models, setup models, schemas, service helpers, and REST router for user-scoped accounts, categories, and tags.
-- `ledgr/features/expenses/`: Expense models, schemas, service helpers, and REST router.
-- `ledgr/features/budget_transactions/`: Placeholder package for budget transaction tracking.
-- `ledgr/features/budgets/`: Placeholder package for budget planning and limits.
-- `ledgr/features/mutual_funds/`: Placeholder package for Indian mutual fund portfolio tracking.
-- `ledgr/features/equity_portfolio/`: Placeholder package for Indian equity portfolio tracking.
-- `ledgr/features/global_portfolio/`: Placeholder package for global asset tracking.
-- `ledgr/db.py`, `ledgr/models.py`, `ledgr/expenses.py`, `ledgr/schemas.py`, `ledgr/config.py`: Compatibility facades for older imports.
-- `alembic/env.py`: Alembic migration environment wired to SQLModel metadata.
-- `alembic/versions/0001_create_expenses.py`: Initial expenses table migration.
-- `alembic/versions/0002_create_user_setup.py`: Users plus user-scoped setup tables for accounts, categories, and tags.
-- `tests/test_expenses_api.py`, `tests/test_user_setup_api.py`: API tests using an in-memory SQLite database.
-- `bruno/`: Bruno API collection for local manual testing.
-- `Dockerfile`: Builds the FastAPI app image using `uv`, but is not used by the current development compose setup.
-- `docker-compose.yml`: Starts only PostgreSQL for local development.
-- `.dockerignore`: Keeps local env, cache, and VCS files out of Docker build context.
-- `pyproject.toml`: Python project definition for package `ledgr`, version `0.1.0`, Python `>=3.9`, dependencies, and dev dependency group.
-- `uv.lock`: Lockfile for the current Python project.
-- `.python-version`: Requests Python `3.9`.
-- `.env.example`: Documents `LEDGR_DATABASE_URL`.
-- `README.md`: Setup, run, test, and endpoint overview.
-- `.gitignore`: Ignores Rust `target/` and local environment files.
+## Backend API Areas Covered by Tests
+
+### `tests/test_user_api.py`
+
+- register + token issuance flow
+- `/users/me` profile response
+- setup account CRUD surface relevant to create/list/patch
+- account type validation for wallet/bank/credit card fields
+- duplicate account/category conflict handling
+- global + user category grouping by kind
+- tags creation/list behavior
+- goals create/list behavior and per-user scoping
+
+### `tests/test_transactions_api.py`
+
+- expense/income/investment/refund transaction balance effects
+- insufficient funds validation for expenses and transfers
+- duplicate transactions allowed when payloads match
+- ownership checks for account access across users
+- transfer behavior:
+  - account-to-account transfer (two transactions + balance movement)
+  - same-account rejection
+  - unauthorized destination rejection
+  - single-account transfer category cases (e.g. credit card transfer) now debit account balance
+- transaction edit behavior:
+  - updates rebalance affected account(s)
+  - transfer edits are rejected
+  - category kind mismatch is rejected
+
+## Frontend Scope Implemented
+
+`frontend/src/App.tsx` implements:
+
+- Auth: login/register + token persistence + `/users/me`
+- Dashboard section:
+  - total balance (from `/users/setup/accounts`)
+  - monthly spend (from `/transactions`)
+  - recent transactions list
+- Transaction section:
+  - header-level "Add transaction" toggle composer available from any page
+  - transaction create form for income/expense/transfer/investment/refund
+  - category dropdown filtered by selected transaction type
+  - recent transactions list with type-aware amount coloring/sign
+  - inline transaction edit flow for non-transfer transactions
+- Accounts section:
+  - account create form (wallet/bank/credit card)
+  - accounts list with balances
+- Goal section:
+  - goal create form
+  - goals list with progress summary
+- Profile section:
+  - user profile details and account/transaction counts
+  - goals count
+
+Supporting frontend API methods are in `frontend/src/api.ts` and typed in `frontend/src/types.ts`.
+
+## Backend Endpoints in Current Use
+
+- Users/auth/profile:
+  - `POST /users/register`
+  - `POST /users/token`
+  - `GET /users/me`
+- User setup:
+  - `GET/POST/PATCH /users/setup/accounts`
+  - `GET/POST /users/setup/categories`
+  - `GET/POST /users/setup/tags`
+  - `GET/POST /users/setup/goals`
+- Transactions:
+  - `GET /transactions`
+  - `POST /transactions`
+  - `PATCH /transactions/{transaction_id}`
 
 ## Common Commands
 
-Use these from the repository root:
+From repository root:
 
 ```sh
 uv run alembic upgrade head
 uv run main.py
-```
-
-If `uv` is unavailable, the current app can also run directly:
-
-```sh
-python main.py
-```
-
-Run tests:
-
-```sh
 uv run pytest
 ```
 
-Open API collection:
+From `frontend/`:
 
 ```sh
-bruno/
-```
-
-Run with Docker:
-
-```sh
-docker compose up -d
+npm run dev
+npm run build
 ```
 
 ## Development Notes
 
-- Keep changes scoped to the active Python project unless the user explicitly asks to restore or rebuild the older Rust/Next architecture.
-- Keep feature-specific code under `ledgr/features/<feature>/`. Prefer `models.py`, `schemas.py`, `router.py`, and service/query helpers within the feature package.
-- Keep shared infrastructure under `ledgr/core/`.
-- Import every SQLModel table model from `ledgr/models.py` so Alembic autogenerate sees all feature tables.
-- User setup data must be scoped by `user_id`; do not expose global account, category, or tag setup lists.
-- Use REST resource naming. Current expense routes live under `/expenses`.
-- Store Indian currency amounts as decimal rupee values with two fractional digits.
-- Use Alembic for schema changes. Update SQLAlchemy models first, then run `uv run alembic revision --autogenerate -m "..."`.
-- In Docker Compose, only Postgres runs. Local app and Alembic should use `postgresql+psycopg://postgres:postgres@localhost:5433/ledgr`.
-- If adding dependencies, update `pyproject.toml` and refresh `uv.lock` with `uv`.
-- If adding application configuration, update `.env.example`.
-- Keep tests focused around API behavior and persistence boundaries.
-- Keep the Bruno collection in sync when adding or changing API routes.
-- Do not commit `.env`, `.env.*`, `.venv`, or `.DS_Store`.
-
-## Current Gaps
-
-- `.gitignore` still contains `/target`, which only matters if Rust code is restored.
-- No formatter or linter has been chosen yet.
+- Keep backend feature code under `ledgr/features/<feature>/`.
+- Prefer API changes with accompanying tests in `tests/`.
+- Keep frontend API contracts aligned with backend schema/router responses.
+- When adding DB fields/models, update SQLModel models first, then create Alembic migration.
+- Transaction category kind must align with transaction type (`income`, `expense`, `transfer`, `investment`, `refund`).
+- Transfer edit endpoint intentionally rejects transfer edits to avoid breaking paired-transfer semantics.
+- Vite dev proxy must include `/transactions`, `/users`, and `/health` for local frontend API calls.
+- Do not commit local env files (`.env`, `.env.*`, `.venv`, `.DS_Store`).

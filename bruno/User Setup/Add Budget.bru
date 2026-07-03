@@ -1,0 +1,26 @@
+meta {
+  name: Add Budget
+  type: http
+  seq: 12
+}
+
+post {
+  url: {{base_url}}/users/setup/budgets
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "name": "Monthly Food Budget",
+    "amount": "12000.00",
+    "category_id": 1,
+    "start_date": "2026-07-01T00:00:00+00:00",
+    "end_date": "2026-07-31T23:59:59+00:00",
+    "notes": "Track July food expenses"
+  }
+}

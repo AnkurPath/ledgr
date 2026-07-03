@@ -1,0 +1,22 @@
+meta {
+  name: Update Default Opening Balances
+  type: http
+  seq: 13
+}
+
+patch {
+  url: {{base_url}}/users/setup/accounts/defaults/opening-balances
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "cash_opening_balance": "5000.00",
+    "pending_from_friends_opening_balance": "1500.00"
+  }
+}

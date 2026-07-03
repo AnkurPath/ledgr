@@ -1,0 +1,14 @@
+meta {
+  name: Budgets
+  type: http
+  seq: 11
+}
+
+get {
+  url: {{base_url}}/users/setup/budgets
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}

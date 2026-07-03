@@ -41,6 +41,20 @@ class TransactionCreate(BaseModel):
             raise ValueError("account_id is required for this transaction type")
         return self
 
+
+class TransactionUpdate(BaseModel):
+    date: Optional[datetime] = None
+    merchant: Optional[str] = None
+    product: Optional[str] = None
+    amount: Optional[Decimal] = Field(default=None, gt=0)
+    account_id: Optional[int] = None
+    transaction_type: Optional[TransactionTypeEnum] = None
+    category_id: Optional[int] = None
+    tag_id: Optional[int] = None
+    goal_id: Optional[int] = None
+    notes: Optional[str] = None
+    bills: Optional[str] = None
+
 class TransactionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

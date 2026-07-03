@@ -11,6 +11,7 @@ from ledgr.features.transactions.models import TransactionModel
 from ledgr.features.transactions.schemas import (
     TransactionCreate,
     TransactionCreateResponse,
+    TransactionUpdate,
     TransactionResponse,
     TransactionTypeEnum,
 )
@@ -19,6 +20,13 @@ from ledgr.features.transactions.schemas import (
 router = APIRouter(prefix="/transactions", tags=["transactions"])
 
 ACCOUNT_TRANSFER_CATEGORY_NAMES = {"A/C Transfer", "Cash Withdrawal", "Business"}
+TRANSACTION_KIND_MAP = {
+    TransactionTypeEnum.INCOME: "income",
+    TransactionTypeEnum.EXPENSE: "expense",
+    TransactionTypeEnum.TRANSFER: "transfer",
+    TransactionTypeEnum.INVESTMENT: "investment",
+    TransactionTypeEnum.REFUND: "refund",
+}
 
 @router.get("", response_model=list[TransactionResponse])
 def list_transactions(
@@ -61,6 +69,25 @@ def should_move_between_accounts(category: Optional[CategoryModel]) -> bool:
     )
 
 
+def validate_category_kind(category: Optional[CategoryModel], transaction_type: TransactionTypeEnum) -> None:
+    if category is None:
+        return
+    expected_kind = TRANSACTION_KIND_MAP[transaction_type]
+    if category.kind != expected_kind:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Selected category kind must be '{expected_kind}' for {transaction_type.value} transactions",
+        )
+
+
+def account_balance_impact(transaction_type: TransactionTypeEnum, amount: Decimal) -> Decimal:
+    if transaction_type in {TransactionTypeEnum.INCOME, TransactionTypeEnum.REFUND}:
+        return amount
+    if transaction_type in {TransactionTypeEnum.EXPENSE, TransactionTypeEnum.INVESTMENT}:
+        return -amount
+    return Decimal("0.00")
+
+
 def build_transaction(
     *,
     payload: TransactionCreate,
@@ -93,6 +120,7 @@ def create_transaction(
 ) -> TransactionCreateResponse:
     user_id = current_user.id
     category = get_available_category(session, payload.category_id, user_id)
+    validate_category_kind(category, payload.transaction_type)
 
     if payload.transaction_type == TransactionTypeEnum.TRANSFER and should_move_between_accounts(category):
         if payload.source_account_id is None or payload.destination_account_id is None:
@@ -164,20 +192,42 @@ def create_transaction(
             )
         account.current_balance -= payload.amount
         message = "Expense transaction created"
+    elif payload.transaction_type == TransactionTypeEnum.INVESTMENT:
+        if account.current_balance < payload.amount:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Insufficient funds in the selected account",
+            )
+        account.current_balance -= payload.amount
+        message = "Investment transaction created"
     elif payload.transaction_type == TransactionTypeEnum.INCOME:
         account.current_balance += payload.amount
         message = "Income transaction created"
+    elif payload.transaction_type == TransactionTypeEnum.REFUND:
+        account.current_balance += payload.amount
+        message = "Refund transaction created"
     elif payload.transaction_type == TransactionTypeEnum.TRANSFER:
+        if account.current_balance < payload.amount:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Insufficient funds in the selected account",
+            )
+        account.current_balance -= payload.amount
         message = "Transfer transaction created"
     else:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported transaction type")
 
-    if payload.transaction_type in {TransactionTypeEnum.INCOME, TransactionTypeEnum.EXPENSE}:
+    if payload.transaction_type in {
+        TransactionTypeEnum.INCOME,
+        TransactionTypeEnum.EXPENSE,
+        TransactionTypeEnum.INVESTMENT,
+        TransactionTypeEnum.REFUND,
+    }:
         session.add(account)
     transaction = build_transaction(
         payload=payload,
         user_id=user_id,
-        amount=payload.amount,
+        amount=-payload.amount if payload.transaction_type == TransactionTypeEnum.TRANSFER else payload.amount,
         account_id=payload.account_id,
     )
     session.add(transaction)
@@ -185,3 +235,74 @@ def create_transaction(
     session.refresh(transaction)
 
     return TransactionCreateResponse(message=message, transactions=[transaction])
+
+
+@router.patch("/{transaction_id}", response_model=TransactionResponse)
+def update_transaction(
+    transaction_id: int,
+    payload: TransactionUpdate,
+    session: Session = Depends(get_session),
+    current_user: dict = Depends(get_current_user),
+) -> TransactionModel:
+    user_id = current_user.id
+    transaction = session.get(TransactionModel, transaction_id)
+    if not transaction or transaction.user_id != user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found")
+
+    current_type = TransactionTypeEnum(transaction.transaction_type)
+    next_type = payload.transaction_type or current_type
+    if current_type == TransactionTypeEnum.TRANSFER or next_type == TransactionTypeEnum.TRANSFER:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Editing TRANSFER transactions is not supported",
+        )
+
+    old_account = get_owned_account(session, transaction.account_id, user_id)
+    next_account = old_account
+    if payload.account_id is not None and payload.account_id != old_account.id:
+        next_account = get_owned_account(session, payload.account_id, user_id)
+
+    next_amount = payload.amount if payload.amount is not None else transaction.amount
+    category_field_updated = "category_id" in payload.model_fields_set
+    next_category = get_available_category(session, payload.category_id, user_id) if payload.category_id else None
+    if category_field_updated and payload.category_id is not None:
+        validate_category_kind(next_category, next_type)
+    elif not category_field_updated and transaction.category_id is not None:
+        existing_category = get_available_category(session, transaction.category_id, user_id)
+        validate_category_kind(existing_category, next_type)
+
+    old_impact = account_balance_impact(current_type, transaction.amount)
+    next_impact = account_balance_impact(next_type, next_amount)
+
+    if old_account.id == next_account.id:
+        projected_balance = old_account.current_balance - old_impact + next_impact
+        if projected_balance < 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Insufficient funds in the selected account",
+            )
+        old_account.current_balance = projected_balance
+        session.add(old_account)
+    else:
+        projected_old_balance = old_account.current_balance - old_impact
+        projected_next_balance = next_account.current_balance + next_impact
+        if projected_old_balance < 0 or projected_next_balance < 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Insufficient funds in the selected account",
+            )
+        old_account.current_balance = projected_old_balance
+        next_account.current_balance = projected_next_balance
+        session.add(old_account)
+        session.add(next_account)
+
+    values = payload.model_dump(exclude_unset=True)
+    if "transaction_type" in values:
+        values["transaction_type"] = values["transaction_type"].value
+    for field, value in values.items():
+        setattr(transaction, field, value)
+
+    session.add(transaction)
+    session.commit()
+    session.refresh(transaction)
+    return transaction

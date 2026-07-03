@@ -1,13 +1,22 @@
 import type {
   Account,
   ApiStatus,
-  Category,
-  CategoryKind,
-  DailyExpenseSummary,
-  Expense,
-  ExpenseCreate,
-  Tag,
-  User
+  CategoryGroups,
+  Budget,
+  CreateAccountPayload,
+  CreateBudgetPayload,
+  CreateGoalPayload,
+  CreateTransactionPayload,
+  CreateTransactionResponse,
+  SetupDefaultOpeningBalancesPayload,
+  UpdateAccountPayload,
+  UpdateTransactionPayload,
+  Goal,
+  LoginPayload,
+  RegisterPayload,
+  TokenResponse,
+  Transaction,
+  UserProfile
 } from "./types";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? "";
@@ -15,10 +24,11 @@ const apiBaseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? "";
 type RequestOptions = {
   method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
   body?: unknown;
-  query?: Record<string, string | number | boolean | null | undefined>;
+  formBody?: URLSearchParams;
+  token?: string | null;
 };
 
-class ApiError extends Error {
+export class ApiError extends Error {
   status: number;
 
   constructor(status: number, message: string) {
@@ -28,21 +38,32 @@ class ApiError extends Error {
   }
 }
 
-function buildUrl(path: string, query?: RequestOptions["query"]) {
-  const url = new URL(`${apiBaseUrl}${path}`, window.location.origin);
-  Object.entries(query ?? {}).forEach(([key, value]) => {
-    if (value !== null && value !== undefined && value !== "") {
-      url.searchParams.set(key, String(value));
-    }
-  });
-  return url;
+function buildUrl(path: string) {
+  return new URL(`${apiBaseUrl}${path}`, window.location.origin);
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const response = await fetch(buildUrl(path, options.query), {
+  const headers = new Headers();
+  let body: BodyInit | undefined;
+
+  if (options.body !== undefined) {
+    headers.set("Content-Type", "application/json");
+    body = JSON.stringify(options.body);
+  }
+
+  if (options.formBody !== undefined) {
+    headers.set("Content-Type", "application/x-www-form-urlencoded");
+    body = options.formBody;
+  }
+
+  if (options.token) {
+    headers.set("Authorization", `Bearer ${options.token}`);
+  }
+
+  const response = await fetch(buildUrl(path), {
     method: options.method ?? "GET",
-    headers: options.body ? { "Content-Type": "application/json" } : undefined,
-    body: options.body ? JSON.stringify(options.body) : undefined
+    headers,
+    body
   });
 
   if (!response.ok) {
@@ -69,23 +90,31 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
 export const api = {
   health: () => request<ApiStatus>("/health"),
-  users: () => request<User[]>("/users"),
-  createUser: (body: { username: string; display_name?: string | null }) =>
-    request<User>("/users", { method: "POST", body }),
-  accounts: (userId: number) => request<Account[]>(`/users/${userId}/setup/accounts`),
-  createAccount: (userId: number, body: { name: string; account_type?: string | null; opening_balance: string }) =>
-    request<Account>(`/users/${userId}/setup/accounts`, { method: "POST", body }),
-  categories: (userId: number, kind?: CategoryKind) =>
-    request<Category[]>(`/users/${userId}/setup/categories`, { query: { kind } }),
-  createCategory: (userId: number, body: { name: string; kind: CategoryKind }) =>
-    request<Category>(`/users/${userId}/setup/categories`, { method: "POST", body }),
-  tags: (userId: number) => request<Tag[]>(`/users/${userId}/setup/tags`),
-  createTag: (userId: number, body: { name: string }) =>
-    request<Tag>(`/users/${userId}/setup/tags`, { method: "POST", body }),
-  expenses: (query?: { from_date?: string; to_date?: string; category?: string }) =>
-    request<Expense[]>("/expenses", { query: { ...query, limit: 100 } }),
-  dailySummary: (query?: { from_date?: string; to_date?: string }) =>
-    request<DailyExpenseSummary[]>("/expenses/summary/daily", { query }),
-  createExpense: (body: ExpenseCreate) => request<Expense>("/expenses", { method: "POST", body }),
-  deleteExpense: (expenseId: number) => request<void>(`/expenses/${expenseId}`, { method: "DELETE" })
+  register: (body: RegisterPayload) => request<TokenResponse>("/users/register", { method: "POST", body }),
+  login: (body: LoginPayload) => {
+    const formBody = new URLSearchParams();
+    formBody.set("username", body.email);
+    formBody.set("password", body.password);
+    return request<TokenResponse>("/users/token", { method: "POST", formBody });
+  },
+  me: (token: string) => request<UserProfile>("/users/me", { token }),
+  listAccounts: (token: string) => request<Account[]>("/users/setup/accounts", { token }),
+  createAccount: (token: string, body: CreateAccountPayload) =>
+    request<Account>("/users/setup/accounts", { method: "POST", token, body }),
+  setupDefaultOpeningBalances: (token: string, body: SetupDefaultOpeningBalancesPayload) =>
+    request<Account[]>("/users/setup/accounts/defaults/opening-balances", { method: "PATCH", token, body }),
+  updateAccount: (token: string, accountId: number, body: UpdateAccountPayload) =>
+    request<Account>(`/users/setup/accounts/${accountId}`, { method: "PATCH", token, body }),
+  listCategories: (token: string) => request<CategoryGroups>("/users/setup/categories", { token }),
+  listGoals: (token: string) => request<Goal[]>("/users/setup/goals", { token }),
+  createGoal: (token: string, body: CreateGoalPayload) =>
+    request<Goal>("/users/setup/goals", { method: "POST", token, body }),
+  listBudgets: (token: string) => request<Budget[]>("/users/setup/budgets", { token }),
+  createBudget: (token: string, body: CreateBudgetPayload) =>
+    request<Budget>("/users/setup/budgets", { method: "POST", token, body }),
+  listTransactions: (token: string) => request<Transaction[]>("/transactions", { token }),
+  createTransaction: (token: string, body: CreateTransactionPayload) =>
+    request<CreateTransactionResponse>("/transactions", { method: "POST", token, body }),
+  updateTransaction: (token: string, transactionId: number, body: UpdateTransactionPayload) =>
+    request<Transaction>(`/transactions/${transactionId}`, { method: "PATCH", token, body })
 };

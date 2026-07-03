@@ -53,6 +53,7 @@ class AccountModel(SQLModel, table=True):
     credit_limit: Optional[Decimal] = Field(default=None, sa_column=Column(Numeric(14, 2), nullable=True))
     billing_cycle_start: Optional[int] = Field(default=None, ge=1, le=31)
     billing_cycle_end: Optional[int] = Field(default=None, ge=1, le=31)
+    notes: Optional[str] = Field(default=None, max_length=255)
     is_active: bool = Field(default=True, nullable=False)
     created_at: Optional[datetime] = Field(
         default=None,
@@ -149,6 +150,40 @@ class GoalModel(SQLModel, table=True):
     target_amount: Decimal = Field(sa_column=Column(Numeric(14, 2), nullable=False))
     current_amount: Decimal = Field(default=Decimal("0.00"), sa_column=Column(Numeric(14, 2), nullable=False))
     target_date: Optional[datetime] = Field(default=None)
+    is_active: bool = Field(default=True, nullable=False)
+    created_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+        ),
+    )
+    updated_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+            onupdate=func.now(),
+        ),
+    )
+
+
+class BudgetModel(SQLModel, table=True):
+    __tablename__ = "budgets"
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uq_budgets_user_id_name"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True, index=True)
+    user_id: int = Field(foreign_key="users.id", index=True, nullable=False)
+    name: str = Field(max_length=120, index=True)
+    amount: Decimal = Field(sa_column=Column(Numeric(14, 2), nullable=False))
+    category_id: Optional[int] = Field(default=None, foreign_key="categories.id", index=True, nullable=True)
+    start_date: datetime = Field(nullable=False)
+    end_date: datetime = Field(nullable=False)
+    notes: Optional[str] = Field(default=None, max_length=255)
     is_active: bool = Field(default=True, nullable=False)
     created_at: Optional[datetime] = Field(
         default=None,

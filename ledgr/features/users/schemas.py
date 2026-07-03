@@ -65,6 +65,7 @@ class AccountCreate(BaseModel):
     credit_limit: Optional[Decimal] = None
     billing_cycle_start: Optional[int] = Field(default=None, ge=1, le=31)
     billing_cycle_end: Optional[int] = Field(default=None, ge=1, le=31)
+    notes: Optional[str] = Field(default=None, max_length=255)
 
     @model_validator(mode="after")
     def validate_fields_for_account_type(self) -> "AccountCreate":
@@ -102,6 +103,7 @@ class AccountResponse(BaseModel):
     credit_limit: Optional[Decimal] = None
     billing_cycle_start: Optional[int] = None
     billing_cycle_end: Optional[int] = None
+    notes: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     is_active: bool
@@ -117,6 +119,7 @@ class AccountUpdate(BaseModel):
     credit_limit: Optional[Decimal] = None
     billing_cycle_start: Optional[int] = Field(default=None, ge=1, le=31)
     billing_cycle_end: Optional[int] = Field(default=None, ge=1, le=31)
+    notes: Optional[str] = Field(default=None, max_length=255)
 
     def provided_credit_card_fields(self) -> set[str]:
         return {
@@ -132,6 +135,11 @@ class AccountUpdate(BaseModel):
         }
 
     
+class DefaultAccountsOpeningBalanceSetup(BaseModel):
+    cash_opening_balance: Decimal
+    pending_from_friends_opening_balance: Decimal
+
+
 class CategoryCreate(BaseModel):
     kind: CategoryKindEnum
     name: str = Field(..., min_length=1, max_length=120)
@@ -188,3 +196,34 @@ class GoalResponse(BaseModel):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+
+
+class BudgetCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    amount: Decimal = Field(..., gt=0)
+    category_id: Optional[int] = None
+    start_date: datetime
+    end_date: datetime
+    notes: Optional[str] = Field(default=None, max_length=255)
+
+    @model_validator(mode="after")
+    def validate_dates(self) -> "BudgetCreate":
+        if self.end_date < self.start_date:
+            raise ValueError("end_date must be greater than or equal to start_date")
+        return self
+
+
+class BudgetResponse(BaseModel):
+    id: int
+    user_id: int
+    name: str
+    amount: Decimal
+    category_id: Optional[int] = None
+    start_date: datetime
+    end_date: datetime
+    notes: Optional[str] = None
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+    spent_amount: Decimal = Field(default=Decimal("0.00"))
+    remaining_amount: Decimal = Field(default=Decimal("0.00"))

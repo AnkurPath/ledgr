@@ -307,7 +307,175 @@ def test_credit_card_transfer_category_creates_single_transaction_without_accoun
     assert body["amount_transferred"] is None
     assert len(body["transactions"]) == 1
     assert body["transactions"][0]["account_id"] == account["id"]
+    assert body["transactions"][0]["amount"] == "-30.00"
 
     accounts = client.get("/users/setup/accounts", headers=auth_headers(token)).json()
     balances = {account["name"]: account["current_balance"] for account in accounts}
-    assert balances["Checking"] == "100.00"
+    assert balances["Checking"] == "70.00"
+
+
+def test_investment_transaction_debits_balance() -> None:
+    client = make_test_client()
+    token = register_user(client)
+    account = create_account(client, token, opening_balance="1000.00", name="Invest Wallet")
+    category = create_category(client, token, "investment", "Mutual Funds")
+
+    response = client.post(
+        "/transactions",
+        json={
+            "date": "2026-06-28T10:00:00+00:00",
+            "amount": "250.00",
+            "account_id": account["id"],
+            "transaction_type": "INVESTMENT",
+            "category_id": category["id"],
+        },
+        headers=auth_headers(token),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "Investment transaction created"
+    accounts = client.get("/users/setup/accounts", headers=auth_headers(token)).json()
+    balances = {item["name"]: item["current_balance"] for item in accounts}
+    assert balances["Invest Wallet"] == "750.00"
+
+
+def test_refund_transaction_credits_balance() -> None:
+    client = make_test_client()
+    token = register_user(client)
+    account = create_account(client, token, opening_balance="100.00", name="Refund Wallet")
+    category = create_category(client, token, "refund", "Tax Refund")
+
+    response = client.post(
+        "/transactions",
+        json={
+            "date": "2026-06-28T10:00:00+00:00",
+            "amount": "45.00",
+            "account_id": account["id"],
+            "transaction_type": "REFUND",
+            "category_id": category["id"],
+        },
+        headers=auth_headers(token),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "Refund transaction created"
+    accounts = client.get("/users/setup/accounts", headers=auth_headers(token)).json()
+    balances = {item["name"]: item["current_balance"] for item in accounts}
+    assert balances["Refund Wallet"] == "145.00"
+
+
+def test_single_account_transfer_rejects_insufficient_funds() -> None:
+    client = make_test_client()
+    token = register_user(client)
+    account = create_account(client, token, opening_balance="20.00", name="Checking")
+    category = create_category(client, token, "transfer", "Credit Card")
+
+    response = client.post(
+        "/transactions",
+        json={
+            "date": "2026-06-28T10:00:00+00:00",
+            "amount": "30.00",
+            "account_id": account["id"],
+            "transaction_type": "TRANSFER",
+            "category_id": category["id"],
+        },
+        headers=auth_headers(token),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Insufficient funds in the selected account"
+
+
+def test_transaction_rejects_category_kind_mismatch() -> None:
+    client = make_test_client()
+    token = register_user(client)
+    account = create_account(client, token, opening_balance="500.00", name="Primary")
+    expense_category = create_category(client, token, "expense", "Food & Drinks")
+
+    response = client.post(
+        "/transactions",
+        json={
+            "date": "2026-06-28T10:00:00+00:00",
+            "amount": "50.00",
+            "account_id": account["id"],
+            "transaction_type": "INCOME",
+            "category_id": expense_category["id"],
+        },
+        headers=auth_headers(token),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Selected category kind must be 'income' for INCOME transactions"
+
+
+def test_update_transaction_recalculates_balance_for_same_account() -> None:
+    client = make_test_client()
+    token = register_user(client)
+    headers = auth_headers(token)
+    account = create_account(client, token, opening_balance="100.00", name="Wallet")
+    expense_category = create_category(client, token, "expense", "Food & Drinks")
+    refund_category = create_category(client, token, "refund", "Tax Refund")
+
+    created = client.post(
+        "/transactions",
+        json={
+            "date": "2026-06-28T10:00:00+00:00",
+            "amount": "20.00",
+            "account_id": account["id"],
+            "transaction_type": "EXPENSE",
+            "category_id": expense_category["id"],
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200
+    transaction_id = created.json()["transactions"][0]["id"]
+
+    updated = client.patch(
+        f"/transactions/{transaction_id}",
+        json={
+            "amount": "30.00",
+            "transaction_type": "REFUND",
+            "category_id": refund_category["id"],
+        },
+        headers=headers,
+    )
+    assert updated.status_code == 200
+
+    accounts = client.get("/users/setup/accounts", headers=headers).json()
+    balances = {item["name"]: item["current_balance"] for item in accounts}
+    assert balances["Wallet"] == "130.00"
+
+
+def test_update_transaction_recalculates_balance_when_account_changes() -> None:
+    client = make_test_client()
+    token = register_user(client)
+    headers = auth_headers(token)
+    source = create_account(client, token, opening_balance="100.00", name="Source")
+    destination = create_account(client, token, opening_balance="200.00", name="Destination")
+    expense_category = create_category(client, token, "expense", "Food & Drinks")
+
+    created = client.post(
+        "/transactions",
+        json={
+            "date": "2026-06-28T10:00:00+00:00",
+            "amount": "20.00",
+            "account_id": source["id"],
+            "transaction_type": "EXPENSE",
+            "category_id": expense_category["id"],
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200
+    transaction_id = created.json()["transactions"][0]["id"]
+
+    updated = client.patch(
+        f"/transactions/{transaction_id}",
+        json={"account_id": destination["id"], "amount": "40.00"},
+        headers=headers,
+    )
+    assert updated.status_code == 200
+
+    accounts = client.get("/users/setup/accounts", headers=headers).json()
+    balances = {item["name"]: item["current_balance"] for item in accounts}
+    assert balances["Source"] == "100.00"
+    assert balances["Destination"] == "160.00"

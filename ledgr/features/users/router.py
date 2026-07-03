@@ -1,20 +1,26 @@
 from datetime import timedelta
+from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlmodel import Session, select
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
 from ledgr.core.db import get_session
 from ledgr.core.security import ACCESS_TOKEN_EXPIRE_MINUTES, create_access_token, get_password_hash, verify_password, get_current_user
-from ledgr.features.users.models import AccountModel, CategoryModel, TagModel, UserModel
+from ledgr.features.users.models import AccountModel, BudgetModel, CategoryModel, GoalModel, TagModel, UserModel
+from ledgr.features.transactions.models import TransactionModel
 from ledgr.features.users.schemas import (
     Token,
     UserRegister,
     UserProfile,
     AccountCreate, AccountResponse, AccountTypeEnum, AccountUpdate,
+    DefaultAccountsOpeningBalanceSetup,
     CategoryCreate, CategoryGroupsResponse, CategoryResponse,
+    GoalCreate, GoalResponse,
+    BudgetCreate, BudgetResponse,
     TagCreate, TagResponse
 )
 
@@ -119,6 +125,7 @@ def create_account(
         credit_limit=payload.credit_limit,
         billing_cycle_start=payload.billing_cycle_start,
         billing_cycle_end=payload.billing_cycle_end,
+        notes=payload.notes,
     )
     session.add(account)
     try:
@@ -178,6 +185,44 @@ def update_account(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Account name already exists for this user")
     session.refresh(account)
     return account
+
+
+@router.patch("/setup/accounts/defaults/opening-balances", response_model=list[AccountResponse])
+def setup_default_opening_balances(
+    payload: DefaultAccountsOpeningBalanceSetup,
+    session: Session = Depends(get_session),
+    current_user: UserModel = Depends(get_current_user)
+) -> list[AccountModel]:
+    user_id = current_user.id
+    statement = select(AccountModel).where(
+        AccountModel.user_id == user_id,
+        func.lower(AccountModel.name).in_(("cash", "pending from friends")),
+    )
+    accounts = list(session.exec(statement).all())
+    account_by_name = {account.name.lower(): account for account in accounts}
+
+    cash_account = account_by_name.get("cash")
+    pending_account = account_by_name.get("pending from friends")
+    if cash_account is None or pending_account is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Default accounts not found for current user",
+        )
+
+    updates = (
+        (cash_account, payload.cash_opening_balance),
+        (pending_account, payload.pending_from_friends_opening_balance),
+    )
+    for account, next_opening_balance in updates:
+        difference = next_opening_balance - account.opening_balance
+        account.opening_balance = next_opening_balance
+        account.current_balance = account.current_balance + difference
+        session.add(account)
+
+    session.commit()
+    session.refresh(cash_account)
+    session.refresh(pending_account)
+    return [cash_account, pending_account]
 
 
 @router.get("/setup/categories", response_model=CategoryGroupsResponse)
@@ -259,3 +304,117 @@ def create_tag(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Tag already exists for this user")
     session.refresh(tag)
     return tag
+
+
+@router.get("/setup/goals", response_model=list[GoalResponse])
+def list_goals(
+    session: Session = Depends(get_session),
+    current_user: UserModel = Depends(get_current_user)
+) -> list[GoalModel]:
+    user_id = current_user.id
+    statement = select(GoalModel).where(GoalModel.user_id == user_id)
+    return list(session.exec(statement).all())
+
+
+@router.post("/setup/goals", response_model=GoalResponse, status_code=status.HTTP_201_CREATED)
+def create_goal(
+    payload: GoalCreate,
+    session: Session = Depends(get_session),
+    current_user: UserModel = Depends(get_current_user)
+) -> GoalModel:
+    user_id = current_user.id
+    goal = GoalModel(
+        user_id=user_id,
+        name=payload.name,
+        target_amount=payload.target_amount,
+        current_amount=payload.current_amount,
+        target_date=payload.target_date,
+    )
+    session.add(goal)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Goal already exists for this user")
+    session.refresh(goal)
+    return goal
+
+
+def get_budget_spent_amount(session: Session, user_id: int, budget: BudgetModel) -> Decimal:
+    statement = select(func.coalesce(func.sum(TransactionModel.amount), 0)).where(
+        TransactionModel.user_id == user_id,
+        TransactionModel.transaction_type == "EXPENSE",
+        TransactionModel.date >= budget.start_date,
+        TransactionModel.date <= budget.end_date,
+    )
+    if budget.category_id is not None:
+        statement = statement.where(TransactionModel.category_id == budget.category_id)
+    return session.exec(statement).one()
+
+
+def to_budget_response(session: Session, user_id: int, budget: BudgetModel) -> BudgetResponse:
+    spent_amount = get_budget_spent_amount(session, user_id, budget)
+    remaining_amount = budget.amount - spent_amount
+    return BudgetResponse(
+        id=budget.id,
+        user_id=budget.user_id,
+        name=budget.name,
+        amount=budget.amount,
+        category_id=budget.category_id,
+        start_date=budget.start_date,
+        end_date=budget.end_date,
+        notes=budget.notes,
+        is_active=budget.is_active,
+        created_at=budget.created_at,
+        updated_at=budget.updated_at,
+        spent_amount=spent_amount,
+        remaining_amount=remaining_amount,
+    )
+
+
+@router.get("/setup/budgets", response_model=list[BudgetResponse])
+def list_budgets(
+    session: Session = Depends(get_session),
+    current_user: UserModel = Depends(get_current_user)
+) -> list[BudgetResponse]:
+    user_id = current_user.id
+    statement = select(BudgetModel).where(BudgetModel.user_id == user_id).order_by(BudgetModel.created_at.desc())
+    budgets = list(session.exec(statement).all())
+    return [to_budget_response(session, user_id, budget) for budget in budgets]
+
+
+@router.post("/setup/budgets", response_model=BudgetResponse, status_code=status.HTTP_201_CREATED)
+def create_budget(
+    payload: BudgetCreate,
+    session: Session = Depends(get_session),
+    current_user: UserModel = Depends(get_current_user)
+) -> BudgetResponse:
+    user_id = current_user.id
+
+    if payload.category_id is not None:
+        category = session.get(CategoryModel, payload.category_id)
+        if not category or (category.user_id != user_id and not category.is_global):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
+        if category.kind != "expense":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Budgets can only be linked to expense categories",
+            )
+
+    budget = BudgetModel(
+        user_id=user_id,
+        name=payload.name,
+        amount=payload.amount,
+        category_id=payload.category_id,
+        start_date=payload.start_date,
+        end_date=payload.end_date,
+        notes=payload.notes,
+    )
+    session.add(budget)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Budget already exists for this user")
+    session.refresh(budget)
+    return to_budget_response(session, user_id, budget)

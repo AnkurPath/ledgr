@@ -1,8 +1,8 @@
-"""Initial Setup
+"""Intitial Commit
 
-Revision ID: b9958d0f7256
+Revision ID: 0f0fd8a84eea
 Revises: 
-Create Date: 2026-06-28 21:29:55.310710
+Create Date: 2026-07-03 21:37:53.226096
 
 """
 from typing import Sequence, Union
@@ -13,7 +13,7 @@ import sqlmodel
 
 
 # revision identifiers, used by Alembic.
-revision: str = 'b9958d0f7256'
+revision: str = '0f0fd8a84eea'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -44,6 +44,12 @@ def upgrade() -> None:
     sa.Column('opening_balance', sa.Numeric(precision=14, scale=2), nullable=False),
     sa.Column('current_balance', sa.Numeric(precision=14, scale=2), nullable=False),
     sa.Column('currency', sa.String(length=3), nullable=False),
+    sa.Column('card_number', sqlmodel.sql.sqltypes.AutoString(length=16), nullable=True),
+    sa.Column('expiration_date', sa.DateTime(), nullable=True),
+    sa.Column('credit_limit', sa.Numeric(precision=14, scale=2), nullable=True),
+    sa.Column('billing_cycle_start', sa.Integer(), nullable=True),
+    sa.Column('billing_cycle_end', sa.Integer(), nullable=True),
+    sa.Column('notes', sqlmodel.sql.sqltypes.AutoString(length=255), nullable=True),
     sa.Column('is_active', sa.Boolean(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
@@ -51,6 +57,7 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('user_id', 'name', name='uq_accounts_user_id_name')
     )
+    op.create_index(op.f('ix_accounts_card_number'), 'accounts', ['card_number'], unique=False)
     op.create_index(op.f('ix_accounts_id'), 'accounts', ['id'], unique=False)
     op.create_index(op.f('ix_accounts_name'), 'accounts', ['name'], unique=False)
     op.create_index(op.f('ix_accounts_user_id'), 'accounts', ['user_id'], unique=False)
@@ -63,7 +70,7 @@ def upgrade() -> None:
     sa.Column('is_active', sa.Boolean(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-    sa.CheckConstraint("kind in ('income', 'expense', 'transfer')", name='ck_categories_kind'),
+    sa.CheckConstraint("kind in ('income', 'expense', 'transfer', 'investment', 'refund')", name='ck_categories_kind'),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('user_id', 'kind', 'name', name='uq_categories_user_id_kind_name')
@@ -105,6 +112,27 @@ def upgrade() -> None:
     op.create_index(op.f('ix_tags_id'), 'tags', ['id'], unique=False)
     op.create_index(op.f('ix_tags_name'), 'tags', ['name'], unique=False)
     op.create_index(op.f('ix_tags_user_id'), 'tags', ['user_id'], unique=False)
+    op.create_table('budgets',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('user_id', sa.Integer(), nullable=False),
+    sa.Column('name', sqlmodel.sql.sqltypes.AutoString(length=120), nullable=False),
+    sa.Column('amount', sa.Numeric(precision=14, scale=2), nullable=False),
+    sa.Column('category_id', sa.Integer(), nullable=True),
+    sa.Column('start_date', sa.DateTime(), nullable=False),
+    sa.Column('end_date', sa.DateTime(), nullable=False),
+    sa.Column('notes', sqlmodel.sql.sqltypes.AutoString(length=255), nullable=True),
+    sa.Column('is_active', sa.Boolean(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.ForeignKeyConstraint(['category_id'], ['categories.id'], ),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('user_id', 'name', name='uq_budgets_user_id_name')
+    )
+    op.create_index(op.f('ix_budgets_category_id'), 'budgets', ['category_id'], unique=False)
+    op.create_index(op.f('ix_budgets_id'), 'budgets', ['id'], unique=False)
+    op.create_index(op.f('ix_budgets_name'), 'budgets', ['name'], unique=False)
+    op.create_index(op.f('ix_budgets_user_id'), 'budgets', ['user_id'], unique=False)
     op.create_table('transactions',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('user_id', sa.Integer(), nullable=False),
@@ -126,8 +154,7 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['goal_id'], ['goals.id'], ),
     sa.ForeignKeyConstraint(['tag_id'], ['tags.id'], ),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
-    sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('user_id', 'account_id', 'date', 'amount', name='uq_transactions_user_account_date_amount')
+    sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_transactions_account_id'), 'transactions', ['account_id'], unique=False)
     op.create_index(op.f('ix_transactions_category_id'), 'transactions', ['category_id'], unique=False)
@@ -148,6 +175,11 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_transactions_category_id'), table_name='transactions')
     op.drop_index(op.f('ix_transactions_account_id'), table_name='transactions')
     op.drop_table('transactions')
+    op.drop_index(op.f('ix_budgets_user_id'), table_name='budgets')
+    op.drop_index(op.f('ix_budgets_name'), table_name='budgets')
+    op.drop_index(op.f('ix_budgets_id'), table_name='budgets')
+    op.drop_index(op.f('ix_budgets_category_id'), table_name='budgets')
+    op.drop_table('budgets')
     op.drop_index(op.f('ix_tags_user_id'), table_name='tags')
     op.drop_index(op.f('ix_tags_name'), table_name='tags')
     op.drop_index(op.f('ix_tags_id'), table_name='tags')
@@ -164,6 +196,7 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_accounts_user_id'), table_name='accounts')
     op.drop_index(op.f('ix_accounts_name'), table_name='accounts')
     op.drop_index(op.f('ix_accounts_id'), table_name='accounts')
+    op.drop_index(op.f('ix_accounts_card_number'), table_name='accounts')
     op.drop_table('accounts')
     op.drop_index(op.f('ix_users_id'), table_name='users')
     op.drop_index(op.f('ix_users_email'), table_name='users')

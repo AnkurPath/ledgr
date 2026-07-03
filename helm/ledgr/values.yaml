@@ -1,0 +1,40 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/ankur/ledgr
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8000
+
+resources: {}
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+env:
+  LEDGR_JWT_SECRET_KEY: "replace-me"
+  ALGORITHM: "HS256"
+  ACCESS_TOKEN_EXPIRE_MINUTES: "30"
+
+secretEnv:
+  LEDGR_DATABASE_URL: "postgresql+psycopg://postgres:postgres@postgres:5432/ledgr"
+
+createSecret: true
+existingSecretName: ""
+
+livenessProbe:
+  enabled: true
+  path: /health
+  initialDelaySeconds: 20
+  periodSeconds: 20
+
+readinessProbe:
+  enabled: true
+  path: /health
+  initialDelaySeconds: 10
+  periodSeconds: 10
