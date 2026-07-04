@@ -2,6 +2,7 @@ from enum import Enum
 from decimal import Decimal
 from typing import Optional
 from datetime import datetime
+from uuid import UUID
 
 from pydantic import BaseModel, Field, EmailStr, model_validator
 
@@ -91,8 +92,8 @@ class AccountCreate(BaseModel):
 
 
 class AccountResponse(BaseModel):
-    id: int
-    user_id: int
+    id: UUID
+    user_id: UUID
     name: str
     account_type: AccountTypeEnum
     opening_balance: Decimal
@@ -146,8 +147,8 @@ class CategoryCreate(BaseModel):
 
 
 class CategoryResponse(BaseModel):
-    id: int
-    user_id: Optional[int] = None
+    id: UUID
+    user_id: Optional[UUID] = None
     is_global: bool
     kind: CategoryKindEnum
     name: str
@@ -170,8 +171,8 @@ class TagCreate(BaseModel):
 
 
 class TagResponse(BaseModel):
-    id: int
-    user_id: int
+    id: UUID
+    user_id: UUID
     name: str
     is_active: bool
     color: Optional[str] = Field(default=None, max_length=7)  # Hex color code
@@ -187,8 +188,8 @@ class GoalCreate(BaseModel):
 
 
 class GoalResponse(BaseModel):
-    id: int
-    user_id: int
+    id: UUID
+    user_id: UUID
     name: str
     target_amount: Decimal
     current_amount: Decimal
@@ -201,7 +202,7 @@ class GoalResponse(BaseModel):
 class BudgetCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
     amount: Decimal = Field(..., gt=0)
-    category_id: Optional[int] = None
+    category_id: Optional[UUID] = None
     start_date: datetime
     end_date: datetime
     notes: Optional[str] = Field(default=None, max_length=255)
@@ -214,11 +215,11 @@ class BudgetCreate(BaseModel):
 
 
 class BudgetResponse(BaseModel):
-    id: int
-    user_id: int
+    id: UUID
+    user_id: UUID
     name: str
     amount: Decimal
-    category_id: Optional[int] = None
+    category_id: Optional[UUID] = None
     start_date: datetime
     end_date: datetime
     notes: Optional[str] = None

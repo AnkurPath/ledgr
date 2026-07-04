@@ -12,7 +12,10 @@ from ledgr.models import (UserModel,
                           CategoryModel, 
                           TagModel,
                           GoalModel, 
-                          TransactionModel 
+                          BudgetModel,
+                          TransactionModel,
+                          MutualFundDataModel,
+                          NetWorthModel
                           )
 
 # this is the Alembic Config object, which provides

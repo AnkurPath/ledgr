@@ -1,5 +1,12 @@
+import json
+import urllib.request
+from typing import Any
+
 from sqlmodel import Session, select
+
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from ledgr.features.users.models import CategoryModel, TagModel
+from ledgr.features.investments.models import MutualFundDataModel
 
 DEFAULT_CATEGORIES = [
     # INCOME
@@ -111,9 +118,61 @@ def seed_global_tags(session: Session):
     session.commit()
     print("Successfully seeded global tags.")
 
+def seed_mf_data(session: Session):
+    url = "https://api.mfapi.in/mf"
+    existing = session.exec(select(MutualFundDataModel.scheme_code).limit(1)).first()
+    if existing is not None:
+        print("MF data already seeded.")
+        return
+
+    try:
+        response = urllib.request.urlopen(url, timeout=30)
+        data = json.loads(response.read().decode("utf-8"))
+        if not isinstance(data, list):
+            print("Unexpected MF API response shape.")
+            return
+
+        rows: list[dict[str, Any]] = []
+        for mf_data in data:
+            scheme_code = mf_data.get("schemeCode")
+            scheme_name = mf_data.get("schemeName")
+            if scheme_code is None or not scheme_name:
+                # Skip malformed records from upstream API.
+                continue
+
+            rows.append(
+                {
+                    "scheme_code": scheme_code,
+                    "scheme_name": scheme_name,
+                    "isin_growth": mf_data.get("isinGrowth"),
+                    "isin_div_reinvestment": mf_data.get("isinDivReinvestment"),
+                }
+            )
+
+        if not rows:
+            print("No valid MF rows to seed.")
+            return
+
+        bind = session.get_bind()
+        if bind is not None and bind.dialect.name == "postgresql":
+            stmt = pg_insert(MutualFundDataModel).values(rows)
+            stmt = stmt.on_conflict_do_nothing(index_elements=["scheme_code"])
+            session.execute(stmt)
+        else:
+            existing_codes = set(session.exec(select(MutualFundDataModel.scheme_code)).all())
+            new_rows = [row for row in rows if row["scheme_code"] not in existing_codes]
+            if new_rows:
+                session.bulk_insert_mappings(MutualFundDataModel, new_rows)
+
+        session.commit()
+        print(f"Successfully seeded MF data ({len(rows)} rows processed).")
+    except Exception as e:
+        print(f"Error fetching MF data: {e}")
+        session.rollback()
 
 def seed_all_globals(session: Session):
     """Run this single function to seed everything."""
     seed_global_categories(session)
     seed_global_tags(session)
+    seed_mf_data(session)
 

@@ -2,6 +2,7 @@ from enum import Enum
 from decimal import Decimal
 from typing import Optional
 from datetime import datetime
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -17,13 +18,13 @@ class TransactionCreate(BaseModel):
     merchant: Optional[str] = None
     product: Optional[str] = None
     amount: Decimal = Field(gt=0)
-    account_id: Optional[int] = None
-    source_account_id: Optional[int] = None
-    destination_account_id: Optional[int] = None
+    account_id: Optional[UUID] = None
+    source_account_id: Optional[UUID] = None
+    destination_account_id: Optional[UUID] = None
     transaction_type: TransactionTypeEnum
-    category_id: Optional[int] = None
-    tag_id: Optional[int] = None
-    goal_id: Optional[int] = None   
+    category_id: Optional[UUID] = None
+    tag_id: Optional[UUID] = None
+    goal_id: Optional[UUID] = None   
     notes: Optional[str] = None
     bills: Optional[str] = None
 
@@ -47,28 +48,28 @@ class TransactionUpdate(BaseModel):
     merchant: Optional[str] = None
     product: Optional[str] = None
     amount: Optional[Decimal] = Field(default=None, gt=0)
-    account_id: Optional[int] = None
+    account_id: Optional[UUID] = None
     transaction_type: Optional[TransactionTypeEnum] = None
-    category_id: Optional[int] = None
-    tag_id: Optional[int] = None
-    goal_id: Optional[int] = None
+    category_id: Optional[UUID] = None
+    tag_id: Optional[UUID] = None
+    goal_id: Optional[UUID] = None
     notes: Optional[str] = None
     bills: Optional[str] = None
 
 class TransactionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: int
-    user_id: int
+    id: UUID
+    user_id: UUID
     date: datetime
     merchant: Optional[str] = None
     product: Optional[str] = None
     amount: Decimal
-    account_id: int
+    account_id: UUID
     transaction_type: TransactionTypeEnum
-    category_id: Optional[int] = None
-    tag_id: Optional[int] = None
-    goal_id: Optional[int] = None   
+    category_id: Optional[UUID] = None
+    tag_id: Optional[UUID] = None
+    goal_id: Optional[UUID] = None   
     notes: Optional[str] = None
     bills: Optional[str] = None
     created_at: datetime

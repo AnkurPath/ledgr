@@ -1,6 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional
+from uuid import UUID, uuid4
 
 from sqlalchemy import Column, DateTime, Numeric, func
 from sqlmodel import Field, SQLModel, String
@@ -9,17 +10,17 @@ from sqlmodel import Field, SQLModel, String
 class TransactionModel(SQLModel, table=True):
     __tablename__ = "transactions"
 
-    id: Optional[int] = Field(default=None, primary_key=True, index=True)
-    user_id: int = Field(foreign_key="users.id", index=True, nullable=False)
+    id: UUID = Field(default_factory=uuid4, primary_key=True, index=True)
+    user_id: UUID = Field(foreign_key="users.id", index=True, nullable=False)
     date: datetime = Field(sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()))
     merchant: Optional[str] = Field(default=None, max_length=120)
     product: Optional[str] = Field(default=None, max_length=120)
     amount: Decimal = Field(sa_column=Column(Numeric(14, 2), nullable=False))
-    account_id: int = Field(foreign_key="accounts.id", index=True, nullable=False)
+    account_id: UUID = Field(foreign_key="accounts.id", index=True, nullable=False)
     transaction_type: str = Field(sa_column=Column(String(10), nullable=False))
-    category_id: Optional[int] = Field(foreign_key="categories.id", index=True, default=None)
-    tag_id: Optional[int] = Field(foreign_key="tags.id", index=True, default=None)
-    goal_id: Optional[int] = Field(foreign_key="goals.id", index=True, default=None)
+    category_id: Optional[UUID] = Field(foreign_key="categories.id", index=True, default=None)
+    tag_id: Optional[UUID] = Field(foreign_key="tags.id", index=True, default=None)
+    goal_id: Optional[UUID] = Field(foreign_key="goals.id", index=True, default=None)
     notes: Optional[str] = Field(default=None, max_length=255)
     bills: Optional[str] = Field(default=None, max_length=255)
     created_at: Optional[datetime] = Field(

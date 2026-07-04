@@ -1,6 +1,7 @@
 from datetime import timedelta
 from decimal import Decimal
 from typing import Optional
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.security import OAuth2PasswordRequestForm
@@ -139,7 +140,7 @@ def create_account(
 
 @router.patch("/setup/accounts/{account_id}", response_model=AccountResponse)
 def update_account(
-    account_id: int,
+    account_id: UUID,
     payload: AccountUpdate,
     session: Session = Depends(get_session),
     current_user: UserModel = Depends(get_current_user)
@@ -340,7 +341,7 @@ def create_goal(
     return goal
 
 
-def get_budget_spent_amount(session: Session, user_id: int, budget: BudgetModel) -> Decimal:
+def get_budget_spent_amount(session: Session, user_id: UUID, budget: BudgetModel) -> Decimal:
     statement = select(func.coalesce(func.sum(TransactionModel.amount), 0)).where(
         TransactionModel.user_id == user_id,
         TransactionModel.transaction_type == "EXPENSE",
@@ -352,7 +353,7 @@ def get_budget_spent_amount(session: Session, user_id: int, budget: BudgetModel)
     return session.exec(statement).one()
 
 
-def to_budget_response(session: Session, user_id: int, budget: BudgetModel) -> BudgetResponse:
+def to_budget_response(session: Session, user_id: UUID, budget: BudgetModel) -> BudgetResponse:
     spent_amount = get_budget_spent_amount(session, user_id, budget)
     remaining_amount = budget.amount - spent_amount
     return BudgetResponse(

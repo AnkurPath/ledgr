@@ -1,5 +1,6 @@
 from decimal import Decimal
 from typing import Optional
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session, select
@@ -38,7 +39,7 @@ def list_transactions(
     return list(session.exec(statement).all())
 
 
-def get_owned_account(session: Session, account_id: int, user_id: int, label: str = "Account") -> AccountModel:
+def get_owned_account(session: Session, account_id: UUID, user_id: UUID, label: str = "Account") -> AccountModel:
     account = session.get(AccountModel, account_id)
     if not account or account.user_id != user_id:
         raise HTTPException(
@@ -48,7 +49,7 @@ def get_owned_account(session: Session, account_id: int, user_id: int, label: st
     return account
 
 
-def get_available_category(session: Session, category_id: Optional[int], user_id: int) -> Optional[CategoryModel]:
+def get_available_category(session: Session, category_id: Optional[UUID], user_id: UUID) -> Optional[CategoryModel]:
     if category_id is None:
         return None
 
@@ -91,8 +92,8 @@ def account_balance_impact(transaction_type: TransactionTypeEnum, amount: Decima
 def build_transaction(
     *,
     payload: TransactionCreate,
-    user_id: int,
-    account_id: int,
+    user_id: UUID,
+    account_id: UUID,
     amount: Decimal,
     merchant: Optional[str] = None,
 ) -> TransactionModel:
@@ -239,7 +240,7 @@ def create_transaction(
 
 @router.patch("/{transaction_id}", response_model=TransactionResponse)
 def update_transaction(
-    transaction_id: int,
+    transaction_id: UUID,
     payload: TransactionUpdate,
     session: Session = Depends(get_session),
     current_user: dict = Depends(get_current_user),
