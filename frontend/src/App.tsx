@@ -2,14 +2,18 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import {
   ArrowLeftRight,
+  ArrowRight,
   BarChart3,
+  Bell,
   CheckCircle2,
+  ChevronDown,
   Loader2,
   LockKeyhole,
   LogIn,
   LogOut,
   Pencil,
   PiggyBank,
+  Plus,
   RefreshCw,
   Target,
   TrendingUp,
@@ -34,11 +38,14 @@ import type {
   CreateTransactionPayload,
   Budget,
   Goal,
+  GoalTemplate,
   MutualFundPortfolio,
   MutualFundSearchItem,
+  NetWorthOverview,
   StockPortfolio,
   InternationalPortfolio,
   InvestmentOptionsCatalog,
+  Tag,
   TokenResponse,
   Transaction,
   TransactionType,
@@ -46,7 +53,16 @@ import type {
 } from "./types";
 
 type AuthMode = "login" | "register";
+type PublicView = "landing" | "auth";
 type DashboardSection = "Dashboard" | "Transaction" | "Investment" | "Budget" | "Goal" | "Accounts" | "Profile";
+type TransactionDatePreset = "this_month" | "last_month" | "this_year" | "custom";
+const ANALYSIS_TAG_NAMES = ["Needs", "Wants", "Investments"] as const;
+type AnalysisTagName = (typeof ANALYSIS_TAG_NAMES)[number];
+const ANALYSIS_TAG_COLORS: Record<AnalysisTagName, string> = {
+  Needs: "#e85d4c",
+  Wants: "#e8a87c",
+  Investments: "#3d7ea6"
+};
 const investmentTabNames = [
   "Mutual Funds",
   "Stocks",
@@ -97,8 +113,49 @@ function parseAmount(value: string) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function toDateTimeInputValue(value = new Date()) {
-  return new Date(value.getTime() - value.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+function toDateInputValue(value = new Date()) {
+  return new Date(value.getTime() - value.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+
+function dateInputToIso(value: string) {
+  return new Date(`${value}T00:00:00`).toISOString();
+}
+
+function startOfMonth(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+function endOfMonth(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59, 999);
+}
+
+function getTransactionDateRange(
+  preset: TransactionDatePreset,
+  customStart: string,
+  customEnd: string
+): { start: Date; end: Date } {
+  const now = new Date();
+  if (preset === "this_month") {
+    return { start: startOfMonth(now), end: endOfMonth(now) };
+  }
+  if (preset === "last_month") {
+    const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    return { start: startOfMonth(lastMonth), end: endOfMonth(lastMonth) };
+  }
+  if (preset === "this_year") {
+    return {
+      start: new Date(now.getFullYear(), 0, 1),
+      end: new Date(now.getFullYear(), 11, 31, 23, 59, 59, 999)
+    };
+  }
+  const start = customStart ? new Date(`${customStart}T00:00:00`) : startOfMonth(now);
+  const end = customEnd ? new Date(`${customEnd}T23:59:59.999`) : endOfMonth(now);
+  return { start, end };
+}
+
+function isDateInRange(value: string, start: Date, end: Date) {
+  const date = new Date(value);
+  return date >= start && date <= end;
 }
 
 function transactionAmountClass(transactionType: TransactionType) {
@@ -131,8 +188,120 @@ function transactionToneClass(transactionType: TransactionType) {
   return "transaction-tone neutral-touch";
 }
 
+function readPublicViewFromHash(): PublicView {
+  const hash = window.location.hash.replace(/^#/, "");
+  if (hash === "login" || hash === "register" || hash === "auth") {
+    return "auth";
+  }
+  return "landing";
+}
+
+function readAuthModeFromHash(): AuthMode {
+  const hash = window.location.hash.replace(/^#/, "");
+  return hash === "register" ? "register" : "login";
+}
+
+function LandingPage({
+  onGetStarted,
+  onLogin
+}: {
+  onGetStarted: () => void;
+  onLogin: () => void;
+}) {
+  return (
+    <div className="landing-page">
+      <header className="landing-nav">
+        <button className="landing-brand" type="button" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}>
+          <span className="landing-brand-mark">
+            <WalletCards size={20} />
+          </span>
+          Ledgr
+        </button>
+        <div className="landing-nav-actions">
+          <button className="landing-link" type="button" onClick={onLogin}>
+            Log in
+          </button>
+          <button className="landing-cta-secondary" type="button" onClick={onGetStarted}>
+            Get started
+          </button>
+        </div>
+      </header>
+
+      <section className="landing-hero" aria-label="Ledgr introduction">
+        <div className="landing-hero-copy">
+          <p className="landing-brand-hero">Ledgr</p>
+          <h1>See every rupee with quiet clarity.</h1>
+          <p className="landing-hero-support">
+            Track spending, investments, budgets, and goals in one calm workspace built for everyday money decisions.
+          </p>
+          <div className="landing-hero-ctas">
+            <button className="landing-cta-primary" type="button" onClick={onGetStarted}>
+              Start free
+              <ArrowRight size={18} />
+            </button>
+            <button className="landing-cta-ghost" type="button" onClick={onLogin}>
+              I already have an account
+            </button>
+          </div>
+        </div>
+
+        <div className="landing-hero-visual" aria-hidden="true">
+          <div className="landing-hero-glow" />
+          <div className="landing-preview">
+            <div className="landing-preview-sidebar">
+              <span />
+              <span />
+              <span />
+              <span />
+            </div>
+            <div className="landing-preview-main">
+              <div className="landing-preview-title" />
+              <div className="landing-preview-actions">
+                <span />
+                <span />
+                <span />
+                <span />
+              </div>
+              <div className="landing-preview-cards">
+                <div className="landing-preview-balance">
+                  <em />
+                  <strong />
+                </div>
+                <div className="landing-preview-donut" />
+              </div>
+              <div className="landing-preview-chart">
+                <i />
+                <i />
+                <i />
+                <i />
+                <i />
+                <i />
+                <i />
+              </div>
+            </div>
+            <div className="landing-preview-rail">
+              <div className="landing-preview-card" />
+              <div className="landing-preview-activity">
+                <span />
+                <span />
+                <span />
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="landing-focus" aria-label="What Ledgr helps with">
+        <h2>One place for the money that matters.</h2>
+        <p>Accounts, transactions, mutual funds, stocks, budgets, and goals — connected so your next decision is easier.</p>
+      </section>
+    </div>
+  );
+}
+
 function App() {
-  const [mode, setMode] = useState<AuthMode>("login");
+  const [publicView, setPublicView] = useState<PublicView>(() => readPublicViewFromHash());
+  const [mode, setMode] = useState<AuthMode>(() => readAuthModeFromHash());
   const [form, setForm] = useState(blankForm);
   const [token, setToken] = useState<string | null>(() => localStorage.getItem(tokenStorageKey));
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -155,6 +324,18 @@ function App() {
   }, []);
 
   useEffect(() => {
+    function syncFromHash() {
+      if (localStorage.getItem(tokenStorageKey)) {
+        return;
+      }
+      setPublicView(readPublicViewFromHash());
+      setMode(readAuthModeFromHash());
+    }
+    window.addEventListener("hashchange", syncFromHash);
+    return () => window.removeEventListener("hashchange", syncFromHash);
+  }, []);
+
+  useEffect(() => {
     if (!token) {
       setProfile(null);
       setLoadingProfile(false);
@@ -172,10 +353,26 @@ function App() {
       .finally(() => setLoadingProfile(false));
   }, [token]);
 
+  function openLanding() {
+    setPublicView("landing");
+    setError(null);
+    setMessage(null);
+    window.history.replaceState(null, "", window.location.pathname);
+  }
+
+  function openAuth(nextMode: AuthMode) {
+    setMode(nextMode);
+    setPublicView("auth");
+    setError(null);
+    setMessage(null);
+    window.history.replaceState(null, "", `#${nextMode}`);
+  }
+
   function switchMode(nextMode: AuthMode) {
     setMode(nextMode);
     setError(null);
     setMessage(null);
+    window.history.replaceState(null, "", `#${nextMode}`);
   }
 
   function storeToken(response: TokenResponse) {
@@ -223,6 +420,7 @@ function App() {
     window.history.replaceState(null, "", window.location.pathname);
     setToken(null);
     setProfile(null);
+    setPublicView("landing");
     setMessage(null);
     setError(null);
   }
@@ -239,15 +437,21 @@ function App() {
     );
   }
 
+  if (publicView === "landing") {
+    return <LandingPage onGetStarted={() => openAuth("register")} onLogin={() => openAuth("login")} />;
+  }
+
   return (
     <main className="auth-shell">
       <section className="auth-panel" aria-label="Ledgr authentication">
         <div className="brand-pane">
-          <div className="brand-mark">
-            <WalletCards size={30} />
-          </div>
-          <p className="eyebrow">Ledgr</p>
-          <h1>Personal finance, ready when you sign in.</h1>
+          <button className="brand-home" type="button" onClick={openLanding}>
+            <div className="brand-mark">
+              <WalletCards size={30} />
+            </div>
+            <p className="eyebrow">Ledgr</p>
+          </button>
+          <h1>Your money, clearly in view.</h1>
           <div className={`status-pill ${apiStatus}`}>
             {apiStatus === "checking" ? <Loader2 className="spin" size={16} /> : <CheckCircle2 size={16} />}
             <span>{apiStatus === "checking" ? "Checking API" : apiStatus === "ok" ? "API online" : "API offline"}</span>
@@ -347,6 +551,10 @@ function App() {
               {saving ? "Please wait" : submitLabel}
             </button>
           </form>
+
+          <button className="auth-back-link" type="button" onClick={openLanding}>
+            Back to home
+          </button>
         </div>
       </section>
     </main>
@@ -378,6 +586,10 @@ function DashboardShell({
     investment: [],
     refund: []
   });
+  const [tags, setTags] = useState<Tag[]>([]);
+  const [transactionDatePreset, setTransactionDatePreset] = useState<TransactionDatePreset>("this_month");
+  const [transactionCustomStart, setTransactionCustomStart] = useState(toDateInputValue(startOfMonth(new Date())));
+  const [transactionCustomEnd, setTransactionCustomEnd] = useState(toDateInputValue(new Date()));
   const [loadingWorkspace, setLoadingWorkspace] = useState(true);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [workspaceMessage, setWorkspaceMessage] = useState<string | null>(null);
@@ -398,6 +610,8 @@ function DashboardShell({
   const [mutualFundPortfolio, setMutualFundPortfolio] = useState<MutualFundPortfolio | null>(null);
   const [stockPortfolio, setStockPortfolio] = useState<StockPortfolio | null>(null);
   const [internationalPortfolio, setInternationalPortfolio] = useState<InternationalPortfolio | null>(null);
+  const [netWorthOverview, setNetWorthOverview] = useState<NetWorthOverview | null>(null);
+  const [monthDonutFocus, setMonthDonutFocus] = useState<"income" | "expenses" | null>(null);
   const [investmentOptions, setInvestmentOptions] = useState<InvestmentOptionsCatalog>({
     stock_sectors: [],
     international_sectors: [],
@@ -450,7 +664,7 @@ function DashboardShell({
     pendingFromFriendsOpeningBalance: "0.00"
   });
   const [transactionForm, setTransactionForm] = useState({
-    date: toDateTimeInputValue(),
+    date: toDateInputValue(),
     transactionType: "EXPENSE" as TransactionType,
     amount: "",
     merchant: "",
@@ -459,6 +673,7 @@ function DashboardShell({
     destinationAccountId: "",
     transferCategoryId: "",
     categoryId: "",
+    tagId: "",
     notes: ""
   });
   const [goalForm, setGoalForm] = useState({
@@ -470,8 +685,17 @@ function DashboardShell({
   const [editingGoalId, setEditingGoalId] = useState<string | null>(null);
   const [goalEditForm, setGoalEditForm] = useState({
     targetAmount: "",
-    currentAmount: ""
+    currentAmount: "",
+    targetDate: ""
   });
+  const [goalTemplates, setGoalTemplates] = useState<GoalTemplate[]>([]);
+  const [showSuggestedGoals, setShowSuggestedGoals] = useState(false);
+  const [editingHoldingId, setEditingHoldingId] = useState<string | null>(null);
+  const [holdingEditForm, setHoldingEditForm] = useState({
+    unitsOrQuantity: "",
+    avgPrice: ""
+  });
+  const [savingHoldingEdit, setSavingHoldingEdit] = useState(false);
   const [budgetForm, setBudgetForm] = useState({
     name: "",
     amount: "",
@@ -487,6 +711,7 @@ function DashboardShell({
     merchant: "",
     accountId: "",
     categoryId: "",
+    tagId: "",
     notes: ""
   });
 
@@ -531,6 +756,97 @@ function DashboardShell({
     () => accounts.reduce((total, account) => total + parseAmount(account.current_balance), 0),
     [accounts]
   );
+  const liquidBalance = useMemo(
+    () =>
+      accounts
+        .filter((account) => account.account_type === "wallet" || account.account_type === "bank account")
+        .reduce((total, account) => total + parseAmount(account.current_balance), 0),
+    [accounts]
+  );
+  const creditCardUsage = useMemo(() => {
+    const cards = accounts.filter((account) => account.account_type === "credit card");
+    const used = cards.reduce((total, account) => total + Math.max(0, parseAmount(account.current_balance)), 0);
+    const limit = cards.reduce((total, account) => total + parseAmount(account.credit_limit ?? "0"), 0);
+    const percent = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+    return { used, limit, percent };
+  }, [accounts]);
+  const analysisTags = useMemo(() => {
+    return ANALYSIS_TAG_NAMES.map((name) => {
+      const tag = tags.find((item) => item.name.toLowerCase() === name.toLowerCase());
+      return {
+        name,
+        id: tag ? String(tag.id) : "",
+        color: tag?.color ?? ANALYSIS_TAG_COLORS[name]
+      };
+    }).filter((item) => item.id);
+  }, [tags]);
+  const analysisTagById = useMemo(() => {
+    const map: Record<string, AnalysisTagName> = {};
+    for (const tag of analysisTags) {
+      map[tag.id] = tag.name;
+    }
+    return map;
+  }, [analysisTags]);
+  const transactionDateRange = useMemo(
+    () => getTransactionDateRange(transactionDatePreset, transactionCustomStart, transactionCustomEnd),
+    [transactionDatePreset, transactionCustomStart, transactionCustomEnd]
+  );
+  const filteredTransactions = useMemo(
+    () =>
+      transactions.filter((transaction) =>
+        isDateInRange(transaction.date, transactionDateRange.start, transactionDateRange.end)
+      ),
+    [transactions, transactionDateRange]
+  );
+  const spendingAnalysis = useMemo(() => {
+    const totals: Record<AnalysisTagName, number> = {
+      Needs: 0,
+      Wants: 0,
+      Investments: 0
+    };
+    let untagged = 0;
+    for (const transaction of filteredTransactions) {
+      if (transaction.transaction_type !== "EXPENSE" && transaction.transaction_type !== "INVESTMENT") {
+        continue;
+      }
+      const amount = Math.abs(parseAmount(transaction.amount));
+      const tagName = transaction.tag_id ? analysisTagById[String(transaction.tag_id)] : undefined;
+      if (tagName) {
+        totals[tagName] += amount;
+      } else if (transaction.transaction_type === "INVESTMENT") {
+        totals.Investments += amount;
+      } else {
+        untagged += amount;
+      }
+    }
+    const taggedTotal = totals.Needs + totals.Wants + totals.Investments;
+    return { totals, taggedTotal, untagged, total: taggedTotal + untagged };
+  }, [filteredTransactions, analysisTagById]);
+  const investmentsValue = useMemo(() => {
+    const mf = parseAmount(mutualFundPortfolio?.total_current_value ?? "0");
+    const stocks = parseAmount(stockPortfolio?.total_current_value ?? "0");
+    const intl = parseAmount(internationalPortfolio?.total_current_value ?? "0");
+    return mf + stocks + intl;
+  }, [mutualFundPortfolio, stockPortfolio, internationalPortfolio]);
+  const netWorth = useMemo(() => {
+    if (netWorthOverview) {
+      return parseAmount(netWorthOverview.net_worth);
+    }
+    return totalBalance + investmentsValue;
+  }, [netWorthOverview, totalBalance, investmentsValue]);
+  const netWorthHistory = useMemo(() => {
+    if (netWorthOverview?.history?.length) {
+      return netWorthOverview.history.map((point) => ({
+        date: point.date,
+        value: parseAmount(point.net_worth)
+      }));
+    }
+    return [{ date: new Date().toISOString().slice(0, 10), value: netWorth }];
+  }, [netWorthOverview, netWorth]);
+  const maxNetWorthValue = useMemo(
+    () => Math.max(...netWorthHistory.map((point) => point.value), 1),
+    [netWorthHistory]
+  );
   const monthlySpend = useMemo(() => {
     const now = new Date();
     return transactions
@@ -544,6 +860,41 @@ function DashboardShell({
       })
       .reduce((total, transaction) => total + parseAmount(transaction.amount), 0);
   }, [transactions]);
+  const monthlyIncome = useMemo(() => {
+    const now = new Date();
+    return transactions
+      .filter((transaction) => {
+        const date = new Date(transaction.date);
+        return (
+          (transaction.transaction_type === "INCOME" || transaction.transaction_type === "REFUND") &&
+          date.getUTCFullYear() === now.getUTCFullYear() &&
+          date.getUTCMonth() === now.getUTCMonth()
+        );
+      })
+      .reduce((total, transaction) => total + parseAmount(transaction.amount), 0);
+  }, [transactions]);
+  const netChangePercent = useMemo(() => {
+    if (monthlyIncome <= 0) {
+      return monthlySpend > 0 ? -100 : 0;
+    }
+    return Math.round(((monthlyIncome - monthlySpend) / monthlyIncome) * 100);
+  }, [monthlyIncome, monthlySpend]);
+  const initials = useMemo(() => {
+    const source = displayName.trim();
+    const parts = source.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) {
+      return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+    }
+    return source.slice(0, 2).toUpperCase() || "L";
+  }, [displayName]);
+  const dateRangeLabel = useMemo(() => {
+    const end = new Date();
+    const start = new Date();
+    start.setDate(end.getDate() - 6);
+    const format = (value: Date) =>
+      value.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+    return `${format(start)} – ${format(end)}`;
+  }, []);
   const goalsCount = goals.length;
   const investmentCategoryById = useMemo(
     () => Object.fromEntries(categoriesByKind.investment.map((category) => [category.id, category.name])),
@@ -567,17 +918,20 @@ function DashboardShell({
       setLoadingWorkspace(true);
     }
     setWorkspaceError(null);
-    const [accountsResult, goalsResult, budgetsResult, transactionsResult, categoriesResult, mutualFundsResult, stocksResult, internationalResult, investmentOptionsResult] =
+    const [accountsResult, goalsResult, budgetsResult, transactionsResult, categoriesResult, tagsResult, mutualFundsResult, stocksResult, internationalResult, investmentOptionsResult, goalTemplatesResult, netWorthResult] =
       await Promise.allSettled([
       api.listAccounts(token),
       api.listGoals(token),
       api.listBudgets(token),
       api.listTransactions(token),
       api.listCategories(token),
+      api.listTags(token),
       api.listMutualFundPortfolio(token),
       api.listStockPortfolio(token),
       api.listInternationalPortfolio(token),
-      api.listInvestmentOptions(token)
+      api.listInvestmentOptions(token),
+      api.listGoalTemplates(token),
+      api.getNetWorth(token, 30)
     ]);
 
     if (accountsResult.status === "fulfilled") {
@@ -595,6 +949,9 @@ function DashboardShell({
     if (categoriesResult.status === "fulfilled") {
       setCategoriesByKind(categoriesResult.value);
     }
+    if (tagsResult.status === "fulfilled") {
+      setTags(tagsResult.value);
+    }
     if (mutualFundsResult.status === "fulfilled") {
       setMutualFundPortfolio(mutualFundsResult.value);
     }
@@ -607,6 +964,12 @@ function DashboardShell({
     if (investmentOptionsResult.status === "fulfilled") {
       setInvestmentOptions(investmentOptionsResult.value);
     }
+    if (goalTemplatesResult.status === "fulfilled") {
+      setGoalTemplates(goalTemplatesResult.value);
+    }
+    if (netWorthResult.status === "fulfilled") {
+      setNetWorthOverview(netWorthResult.value);
+    }
 
     const failed = [
       accountsResult,
@@ -614,10 +977,13 @@ function DashboardShell({
       budgetsResult,
       transactionsResult,
       categoriesResult,
+      tagsResult,
       mutualFundsResult,
       stocksResult,
       internationalResult,
-      investmentOptionsResult
+      investmentOptionsResult,
+      goalTemplatesResult,
+      netWorthResult
     ].filter((result) => result.status === "rejected");
     if (failed.length > 0) {
       setWorkspaceMessage(null);
@@ -712,7 +1078,7 @@ function DashboardShell({
     setWorkspaceMessage(null);
 
     const payload: CreateTransactionPayload = {
-      date: new Date(transactionForm.date).toISOString(),
+      date: dateInputToIso(transactionForm.date),
       amount: transactionForm.amount,
       transaction_type: transactionForm.transactionType,
       merchant: transactionForm.merchant || null,
@@ -732,12 +1098,16 @@ function DashboardShell({
       payload.category_id = transactionForm.categoryId ? Number(transactionForm.categoryId) : null;
     }
 
+    if (transactionForm.transactionType === "EXPENSE" || transactionForm.transactionType === "INVESTMENT") {
+      payload.tag_id = transactionForm.tagId || null;
+    }
+
     try {
       const response = await api.createTransaction(token, payload);
       setWorkspaceMessage(response.message);
       setShowTransactionComposer(false);
       setTransactionForm({
-        date: toDateTimeInputValue(),
+        date: toDateInputValue(),
         transactionType: transactionForm.transactionType,
         amount: "",
         merchant: "",
@@ -746,6 +1116,7 @@ function DashboardShell({
         destinationAccountId: "",
         transferCategoryId: "",
         categoryId: "",
+        tagId: "",
         notes: ""
       });
       await loadWorkspace({ showLoader: false });
@@ -1002,7 +1373,8 @@ function DashboardShell({
     setEditingGoalId(goal.id);
     setGoalEditForm({
       targetAmount: goal.target_amount,
-      currentAmount: goal.current_amount
+      currentAmount: goal.current_amount,
+      targetDate: goal.target_date ? goal.target_date.slice(0, 10) : ""
     });
     setWorkspaceError(null);
     setWorkspaceMessage(null);
@@ -1020,15 +1392,70 @@ function DashboardShell({
     try {
       await api.updateGoal(token, editingGoalId, {
         target_amount: goalEditForm.targetAmount,
-        current_amount: goalEditForm.currentAmount
+        current_amount: goalEditForm.currentAmount,
+        target_date: goalEditForm.targetDate ? `${goalEditForm.targetDate}T00:00:00Z` : null
       });
-      setWorkspaceMessage("Goal amounts updated.");
+      setWorkspaceMessage("Goal updated.");
       setEditingGoalId(null);
       await loadWorkspace({ showLoader: false });
     } catch (caught) {
       setWorkspaceError(caught instanceof ApiError ? caught.message : "Unable to update goal.");
     } finally {
       setSavingGoalEdit(false);
+    }
+  }
+
+  function applySuggestedGoal(template: GoalTemplate) {
+    setGoalForm({
+      name: template.name,
+      targetAmount: "",
+      currentAmount: "0.00",
+      targetDate: ""
+    });
+    setShowSuggestedGoals(false);
+    setWorkspaceError(null);
+    setWorkspaceMessage(`Enter a target amount for ${template.name}.`);
+  }
+
+  function startEditHolding(holdingId: string, unitsOrQuantity: string, avgPrice: string) {
+    setEditingHoldingId(holdingId);
+    setHoldingEditForm({ unitsOrQuantity, avgPrice });
+    setWorkspaceError(null);
+    setWorkspaceMessage(null);
+  }
+
+  async function submitHoldingEdit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editingHoldingId) {
+      return;
+    }
+    setSavingHoldingEdit(true);
+    setWorkspaceError(null);
+    setWorkspaceMessage(null);
+    try {
+      if (activeInvestmentTab === "Mutual Funds") {
+        await api.updateMutualFundInvestment(token, editingHoldingId, {
+          units: holdingEditForm.unitsOrQuantity,
+          avg_price: holdingEditForm.avgPrice
+        });
+      } else if (activeInvestmentTab === "Stocks") {
+        await api.updateStockInvestment(token, editingHoldingId, {
+          quantity: holdingEditForm.unitsOrQuantity,
+          avg_price: holdingEditForm.avgPrice
+        });
+      } else if (activeInvestmentTab === "International Investment") {
+        await api.updateInternationalInvestment(token, editingHoldingId, {
+          quantity: holdingEditForm.unitsOrQuantity,
+          avg_price: holdingEditForm.avgPrice
+        });
+      }
+      setWorkspaceMessage("Holding updated.");
+      setEditingHoldingId(null);
+      await loadWorkspace({ showLoader: false });
+    } catch (caught) {
+      setWorkspaceError(caught instanceof ApiError ? caught.message : "Unable to update holding.");
+    } finally {
+      setSavingHoldingEdit(false);
     }
   }
 
@@ -1069,12 +1496,13 @@ function DashboardShell({
   function startEditTransaction(transaction: Transaction) {
     setEditingTransactionId(transaction.id);
     setEditingTransactionForm({
-      date: toDateTimeInputValue(new Date(transaction.date)),
+      date: toDateInputValue(new Date(transaction.date)),
       transactionType: transaction.transaction_type,
       amount: transaction.amount,
       merchant: transaction.merchant ?? "",
       accountId: String(transaction.account_id),
       categoryId: transaction.category_id ? String(transaction.category_id) : "",
+      tagId: transaction.tag_id ? String(transaction.tag_id) : "",
       notes: transaction.notes ?? ""
     });
     setWorkspaceError(null);
@@ -1096,12 +1524,17 @@ function DashboardShell({
 
     try {
       await api.updateTransaction(token, editingTransactionId, {
-        date: new Date(editingTransactionForm.date).toISOString(),
+        date: dateInputToIso(editingTransactionForm.date),
         transaction_type: editingTransactionForm.transactionType,
         amount: editingTransactionForm.amount,
         merchant: editingTransactionForm.merchant || null,
         account_id: Number(editingTransactionForm.accountId),
         category_id: editingTransactionForm.categoryId ? Number(editingTransactionForm.categoryId) : null,
+        tag_id:
+          editingTransactionForm.transactionType === "EXPENSE" ||
+          editingTransactionForm.transactionType === "INVESTMENT"
+            ? editingTransactionForm.tagId || null
+            : null,
         notes: editingTransactionForm.notes || null
       });
       setWorkspaceMessage("Transaction updated.");
@@ -1115,45 +1548,166 @@ function DashboardShell({
   }
 
   function renderDashboardSection() {
+    const chartPoints = netWorthHistory.length > 14 ? netWorthHistory.filter((_, index) => index % 2 === 0 || index === netWorthHistory.length - 1) : netWorthHistory;
+    const monthTotal = monthlyIncome + monthlySpend;
+    const expenseRatio = monthTotal > 0 ? monthlySpend / monthTotal : 0.55;
+    const incomeRatio = 1 - expenseRatio;
+    const donutSize = 168;
+    const donutStroke = 22;
+    const donutRadius = (donutSize - donutStroke) / 2;
+    const donutCircumference = 2 * Math.PI * donutRadius;
+    const expenseArc = expenseRatio * donutCircumference;
+    const incomeArc = incomeRatio * donutCircumference;
+    const donutCenterValue = monthDonutFocus === "income" ? monthlyIncome : monthlySpend;
+    const donutCenterLabel = monthDonutFocus === "income" ? "Income" : "Expenses";
+
     return (
       <>
-        <section className="dashboard-grid" aria-label="Dashboard overview">
-          <article>
+        <section className="dashboard-overview" aria-label="Dashboard overview">
+          <article className="summary-card">
             <p>Total balance</p>
-            <strong>{formatCurrency(totalBalance)}</strong>
+            <div className="summary-card-value">
+              <strong>{formatCurrency(netWorth)}</strong>
+              <span className={`growth-badge ${netChangePercent < 0 ? "negative" : ""}`}>
+                {netChangePercent >= 0 ? "+" : ""}
+                {netChangePercent}%
+              </span>
+            </div>
           </article>
-          <article>
-            <p>Monthly spend</p>
-            <strong>{formatCurrency(monthlySpend)}</strong>
+          <article className="summary-card">
+            <p>Liquid balance</p>
+            <div className="summary-card-value">
+              <strong>{formatCurrency(liquidBalance)}</strong>
+            </div>
+            <p className="summary-card-note">Wallet and bank accounts</p>
           </article>
-          <article>
-            <p>Transactions</p>
-            <strong>{transactions.length}</strong>
+          <article className="summary-card credit-usage-card">
+            <p>Credit card usage</p>
+            <div className="summary-card-value">
+              <strong>{creditCardUsage.percent}%</strong>
+            </div>
+            <div
+              className="credit-usage-track"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={creditCardUsage.percent}
+              aria-label="Credit card usage"
+            >
+              <span className="credit-usage-fill" style={{ width: `${creditCardUsage.percent}%` }} />
+            </div>
+            <div className="credit-usage-stats">
+              <div>
+                <span>Used</span>
+                <strong>{formatCurrency(creditCardUsage.used)}</strong>
+              </div>
+              <div>
+                <span>Limit</span>
+                <strong>{formatCurrency(creditCardUsage.limit)}</strong>
+              </div>
+            </div>
+          </article>
+          <article className="summary-card expense-card">
+            <div className="donut-chart-wrap" onMouseLeave={() => setMonthDonutFocus(null)}>
+              <svg
+                className="donut-chart-svg"
+                viewBox={`0 0 ${donutSize} ${donutSize}`}
+                role="img"
+                aria-label={`This month income ${formatCurrency(monthlyIncome)}, expenses ${formatCurrency(monthlySpend)}`}
+              >
+                <g transform={`rotate(-90 ${donutSize / 2} ${donutSize / 2})`}>
+                  <circle
+                    className={`donut-segment income${monthDonutFocus === "income" ? " active" : ""}${monthDonutFocus === "expenses" ? " dimmed" : ""}`}
+                    cx={donutSize / 2}
+                    cy={donutSize / 2}
+                    r={donutRadius}
+                    fill="none"
+                    strokeWidth={donutStroke}
+                    strokeDasharray={`${incomeArc} ${donutCircumference - incomeArc}`}
+                    strokeDashoffset={0}
+                    onMouseEnter={() => setMonthDonutFocus("income")}
+                    onFocus={() => setMonthDonutFocus("income")}
+                    onBlur={() => setMonthDonutFocus(null)}
+                    tabIndex={0}
+                    role="button"
+                    aria-label={`Income ${formatCurrency(monthlyIncome)}`}
+                  />
+                  <circle
+                    className={`donut-segment expenses${monthDonutFocus === "expenses" ? " active" : ""}${monthDonutFocus === "income" ? " dimmed" : ""}`}
+                    cx={donutSize / 2}
+                    cy={donutSize / 2}
+                    r={donutRadius}
+                    fill="none"
+                    strokeWidth={donutStroke}
+                    strokeDasharray={`${expenseArc} ${donutCircumference - expenseArc}`}
+                    strokeDashoffset={-incomeArc}
+                    onMouseEnter={() => setMonthDonutFocus("expenses")}
+                    onFocus={() => setMonthDonutFocus("expenses")}
+                    onBlur={() => setMonthDonutFocus(null)}
+                    tabIndex={0}
+                    role="button"
+                    aria-label={`Expenses ${formatCurrency(monthlySpend)}`}
+                  />
+                </g>
+              </svg>
+              <div className="donut-center">
+                <strong>{formatCurrency(donutCenterValue)}</strong>
+                <span>{donutCenterLabel}</span>
+              </div>
+            </div>
+            <div className="expense-meta">
+              <p>This month</p>
+              <strong>{formatCurrency(monthlySpend)}</strong>
+              <button
+                type="button"
+                className={`legend-row interactive${monthDonutFocus === "income" ? " active" : ""}`}
+                onMouseEnter={() => setMonthDonutFocus("income")}
+                onMouseLeave={() => setMonthDonutFocus(null)}
+                onFocus={() => setMonthDonutFocus("income")}
+                onBlur={() => setMonthDonutFocus(null)}
+              >
+                <span className="legend-dot blue" />
+                Income {formatCurrency(monthlyIncome)}
+              </button>
+              <button
+                type="button"
+                className={`legend-row interactive${monthDonutFocus === "expenses" ? " active" : ""}`}
+                onMouseEnter={() => setMonthDonutFocus("expenses")}
+                onMouseLeave={() => setMonthDonutFocus(null)}
+                onFocus={() => setMonthDonutFocus("expenses")}
+                onBlur={() => setMonthDonutFocus(null)}
+              >
+                <span className="legend-dot pink" />
+                Expenses {formatCurrency(monthlySpend)}
+              </button>
+            </div>
           </article>
         </section>
-        <section className="workspace-panel">
-          <div>
-            <p className="eyebrow">Recent activity</p>
-            <h2>Latest transactions</h2>
+
+        <section className="chart-panel networth-panel" aria-label="Net worth">
+          <div className="chart-panel-header">
+            <h2>Net worth</h2>
+            <strong className="networth-total">{formatCurrency(netWorth)}</strong>
           </div>
-          {transactions.length === 0 ? (
-            <p>No transactions yet.</p>
-          ) : (
-            <div className="data-list">
-              {transactions.slice(0, 6).map((transaction) => (
-                <article key={transaction.id} className={`data-row ${transactionToneClass(transaction.transaction_type)}`}>
-                  <div>
-                    <strong>{transaction.merchant || transaction.transaction_type}</strong>
-                    <p>{new Date(transaction.date).toLocaleString()}</p>
-                  </div>
-                  <span className={transactionAmountClass(transaction.transaction_type)}>
-                    {transactionAmountPrefix(transaction.transaction_type)}
-                    {formatCurrency(parseAmount(transaction.amount))}
-                  </span>
-                </article>
-              ))}
-            </div>
-          )}
+          <div className="networth-chart" aria-label="Net worth over time">
+            {chartPoints.map((point) => {
+              const height = Math.max(8, (point.value / maxNetWorthValue) * 150);
+              const label = new Date(`${point.date}T00:00:00`).toLocaleDateString(undefined, {
+                day: "numeric",
+                month: "short"
+              });
+              return (
+                <div key={point.date} className="networth-bar-group">
+                  <div
+                    className="networth-bar"
+                    style={{ height: `${height}px` }}
+                    title={`${label}: ${formatCurrency(point.value)}`}
+                  />
+                  <span className="networth-bar-label">{label}</span>
+                </div>
+              );
+            })}
+          </div>
         </section>
       </>
     );
@@ -1182,7 +1736,11 @@ function DashboardShell({
                   sourceAccountId: "",
                   destinationAccountId: "",
                   transferCategoryId: "",
-                  categoryId: ""
+                  categoryId: "",
+                  tagId:
+                    event.target.value === "INVESTMENT"
+                      ? analysisTags.find((tag) => tag.name === "Investments")?.id ?? ""
+                      : ""
                 })
               }
             >
@@ -1208,7 +1766,7 @@ function DashboardShell({
             Date
             <input
               required
-              type="datetime-local"
+              type="date"
               value={transactionForm.date}
               onChange={(event) => setTransactionForm({ ...transactionForm, date: event.target.value })}
             />
@@ -1251,6 +1809,30 @@ function DashboardShell({
                 ))}
               </select>
             </label>
+          )}
+          {(transactionForm.transactionType === "EXPENSE" || transactionForm.transactionType === "INVESTMENT") && (
+            <fieldset className="analysis-tag-fieldset">
+              <legend>Spending analysis</legend>
+              <p className="form-hint">Classify this as a need, want, or investment for detailed breakdowns.</p>
+              <div className="analysis-tag-options" role="radiogroup" aria-label="Spending analysis">
+                {analysisTags.map((tag) => (
+                  <label
+                    key={tag.id}
+                    className={`analysis-tag-option ${transactionForm.tagId === tag.id ? "selected" : ""}`}
+                    style={{ ["--analysis-tag-color" as string]: tag.color }}
+                  >
+                    <input
+                      type="radio"
+                      name="analysis-tag"
+                      value={tag.id}
+                      checked={transactionForm.tagId === tag.id}
+                      onChange={() => setTransactionForm({ ...transactionForm, tagId: tag.id })}
+                    />
+                    <span>{tag.name}</span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
           )}
           {transactionForm.transactionType !== "TRANSFER" || !transferUsesSourceDestination ? (
             <label>
@@ -1321,12 +1903,109 @@ function DashboardShell({
   }
 
   function renderRecentTransactionsSection() {
+    const analysisTotal = Math.max(spendingAnalysis.total, 1);
+    const needsShare = (spendingAnalysis.totals.Needs / analysisTotal) * 100;
+    const wantsShare = (spendingAnalysis.totals.Wants / analysisTotal) * 100;
+    const investmentsShare = (spendingAnalysis.totals.Investments / analysisTotal) * 100;
+    const analysisDonut = `conic-gradient(
+      ${ANALYSIS_TAG_COLORS.Needs} 0% ${needsShare}%,
+      ${ANALYSIS_TAG_COLORS.Wants} ${needsShare}% ${needsShare + wantsShare}%,
+      ${ANALYSIS_TAG_COLORS.Investments} ${needsShare + wantsShare}% ${needsShare + wantsShare + investmentsShare}%,
+      #d7dde8 ${needsShare + wantsShare + investmentsShare}% 100%
+    )`;
+
     return (
       <section className="workspace-panel">
         <div>
           <p className="eyebrow">Transactions</p>
           <h2>Recent transactions</h2>
         </div>
+
+        <div className="transaction-analysis-panel" aria-label="Spending analysis">
+          <div className="transaction-date-filters">
+            <div className="date-preset-row" role="group" aria-label="Date range">
+              {(
+                [
+                  ["this_month", "This Month"],
+                  ["last_month", "Last Month"],
+                  ["this_year", "This Year"],
+                  ["custom", "Custom"]
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={`date-preset-btn ${transactionDatePreset === value ? "active" : ""}`}
+                  onClick={() => setTransactionDatePreset(value)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {transactionDatePreset === "custom" && (
+              <div className="custom-date-range">
+                <label>
+                  From
+                  <input
+                    type="date"
+                    value={transactionCustomStart}
+                    onChange={(event) => setTransactionCustomStart(event.target.value)}
+                  />
+                </label>
+                <label>
+                  To
+                  <input
+                    type="date"
+                    value={transactionCustomEnd}
+                    onChange={(event) => setTransactionCustomEnd(event.target.value)}
+                  />
+                </label>
+              </div>
+            )}
+          </div>
+
+          <div className="transaction-analysis-chart">
+            <div className="analysis-donut" style={{ background: analysisDonut }}>
+              <div className="analysis-donut-center">
+                <strong>{formatCurrency(spendingAnalysis.total)}</strong>
+                <span>Analyzed</span>
+              </div>
+            </div>
+            <div className="analysis-breakdown">
+              {ANALYSIS_TAG_NAMES.map((name) => {
+                const amount = spendingAnalysis.totals[name];
+                const percent = spendingAnalysis.total > 0 ? Math.round((amount / spendingAnalysis.total) * 100) : 0;
+                return (
+                  <article key={name} className="analysis-breakdown-row">
+                    <div className="analysis-breakdown-label">
+                      <span className="legend-dot" style={{ background: ANALYSIS_TAG_COLORS[name] }} />
+                      <strong>{name}</strong>
+                    </div>
+                    <div className="analysis-bar-track" aria-hidden="true">
+                      <div
+                        className="analysis-bar-fill"
+                        style={{
+                          width: `${percent}%`,
+                          background: ANALYSIS_TAG_COLORS[name]
+                        }}
+                      />
+                    </div>
+                    <div className="analysis-breakdown-values">
+                      <span>{formatCurrency(amount)}</span>
+                      <span>{percent}%</span>
+                    </div>
+                  </article>
+                );
+              })}
+              {spendingAnalysis.untagged > 0 && (
+                <p className="analysis-untagged-note">
+                  Untagged spending: {formatCurrency(spendingAnalysis.untagged)}
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+
         {editingTransactionId !== null && (
           <form className="workspace-form" onSubmit={submitTransactionEdit}>
             <label>
@@ -1337,7 +2016,11 @@ function DashboardShell({
                   setEditingTransactionForm({
                     ...editingTransactionForm,
                     transactionType: event.target.value as TransactionType,
-                    categoryId: ""
+                    categoryId: "",
+                    tagId:
+                      event.target.value === "INVESTMENT"
+                        ? analysisTags.find((tag) => tag.name === "Investments")?.id ?? ""
+                        : editingTransactionForm.tagId
                   })
                 }
               >
@@ -1362,7 +2045,7 @@ function DashboardShell({
               Date
               <input
                 required
-                type="datetime-local"
+                type="date"
                 value={editingTransactionForm.date}
                 onChange={(event) => setEditingTransactionForm({ ...editingTransactionForm, date: event.target.value })}
               />
@@ -1405,6 +2088,30 @@ function DashboardShell({
                 ))}
               </select>
             </label>
+            {(editingTransactionForm.transactionType === "EXPENSE" ||
+              editingTransactionForm.transactionType === "INVESTMENT") && (
+              <fieldset className="analysis-tag-fieldset">
+                <legend>Spending analysis</legend>
+                <div className="analysis-tag-options" role="radiogroup" aria-label="Spending analysis">
+                  {analysisTags.map((tag) => (
+                    <label
+                      key={tag.id}
+                      className={`analysis-tag-option ${editingTransactionForm.tagId === tag.id ? "selected" : ""}`}
+                      style={{ ["--analysis-tag-color" as string]: tag.color }}
+                    >
+                      <input
+                        type="radio"
+                        name="edit-analysis-tag"
+                        value={tag.id}
+                        checked={editingTransactionForm.tagId === tag.id}
+                        onChange={() => setEditingTransactionForm({ ...editingTransactionForm, tagId: tag.id })}
+                      />
+                      <span>{tag.name}</span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            )}
             <label>
               Notes
               <input
@@ -1424,25 +2131,38 @@ function DashboardShell({
           </form>
         )}
         <div className="data-list">
-          {transactions.slice(0, 10).map((transaction) => (
-            <article key={transaction.id} className={`data-row ${transactionToneClass(transaction.transaction_type)}`}>
-              <div>
-                <strong>{transaction.merchant || transaction.transaction_type}</strong>
-                <p>{new Date(transaction.date).toLocaleString()}</p>
-              </div>
-              <div className="row-actions">
-                <span className={transactionAmountClass(transaction.transaction_type)}>
-                  {transactionAmountPrefix(transaction.transaction_type)}
-                  {formatCurrency(parseAmount(transaction.amount))}
-                </span>
-                {transaction.transaction_type !== "TRANSFER" && (
-                  <button className="subtle-action small-action" type="button" onClick={() => startEditTransaction(transaction)}>
-                    Edit
-                  </button>
-                )}
-              </div>
-            </article>
-          ))}
+          {filteredTransactions.slice(0, 10).map((transaction) => {
+            const analysisLabel = transaction.tag_id
+              ? analysisTagById[String(transaction.tag_id)]
+              : transaction.transaction_type === "INVESTMENT"
+                ? "Investments"
+                : null;
+            return (
+              <article key={transaction.id} className={`data-row ${transactionToneClass(transaction.transaction_type)}`}>
+                <div>
+                  <strong>{transaction.merchant || transaction.transaction_type}</strong>
+                  <p>
+                    {new Date(transaction.date).toLocaleDateString()}
+                    {analysisLabel ? ` · ${analysisLabel}` : ""}
+                  </p>
+                </div>
+                <div className="row-actions">
+                  <span className={transactionAmountClass(transaction.transaction_type)}>
+                    {transactionAmountPrefix(transaction.transaction_type)}
+                    {formatCurrency(parseAmount(transaction.amount))}
+                  </span>
+                  {transaction.transaction_type !== "TRANSFER" && (
+                    <button className="subtle-action small-action" type="button" onClick={() => startEditTransaction(transaction)}>
+                      Edit
+                    </button>
+                  )}
+                </div>
+              </article>
+            );
+          })}
+          {filteredTransactions.length === 0 && (
+            <p className="form-hint">No transactions in this date range.</p>
+          )}
         </div>
       </section>
     );
@@ -1559,8 +2279,11 @@ function DashboardShell({
   }
 
   function renderGoalSection() {
+    const existingGoalNames = new Set(goals.map((goal) => goal.name));
+    const availableTemplates = goalTemplates.filter((template) => !existingGoalNames.has(template.name));
+
     return (
-      <section className="workspace-panel">
+      <section className="workspace-panel goal-workspace">
         <div>
           <p className="eyebrow">Goal</p>
           <h2>Create and track goals</h2>
@@ -1604,9 +2327,43 @@ function DashboardShell({
             {savingGoal ? "Saving" : "Add goal"}
           </button>
         </form>
-        <div className="data-list">
+
+        <div className="suggested-goals-block">
+          <button
+            className="subtle-action"
+            type="button"
+            onClick={() => setShowSuggestedGoals((current) => !current)}
+          >
+            {showSuggestedGoals ? "Hide suggested goals" : "Browse suggested goals"}
+          </button>
+          {showSuggestedGoals && (
+            <div className="suggested-goals-list">
+              {availableTemplates.length === 0 ? (
+                <p>All suggested goals are already added.</p>
+              ) : (
+                availableTemplates.map((template) => (
+                  <article key={template.name} className="data-row compact-selection-row">
+                    <div>
+                      <strong>{template.name}</strong>
+                      <p>Set your own target amount</p>
+                    </div>
+                    <button
+                      className="subtle-action small-action"
+                      type="button"
+                      onClick={() => applySuggestedGoal(template)}
+                    >
+                      Use
+                    </button>
+                  </article>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="data-list goal-scroll-list">
           {goals.length === 0 ? (
-            <p>No goals yet.</p>
+            <p>No goals yet. Add one above, or browse suggested goals.</p>
           ) : (
             goals.map((goal) => {
               const target = parseAmount(goal.target_amount);
@@ -1652,10 +2409,18 @@ function DashboardShell({
                             onChange={(event) => setGoalEditForm({ ...goalEditForm, currentAmount: event.target.value })}
                           />
                         </label>
+                        <label>
+                          Target date
+                          <input
+                            type="date"
+                            value={goalEditForm.targetDate}
+                            onChange={(event) => setGoalEditForm({ ...goalEditForm, targetDate: event.target.value })}
+                          />
+                        </label>
                         <div className="inline-actions">
                           <button className="primary-action compact-primary-action" type="submit" disabled={savingGoalEdit}>
                             {savingGoalEdit && <Loader2 className="spin" size={16} />}
-                            {savingGoalEdit ? "Saving" : "Save amount"}
+                            {savingGoalEdit ? "Saving" : "Save"}
                           </button>
                           <button
                             className="subtle-action small-action"
@@ -1669,7 +2434,7 @@ function DashboardShell({
                       </form>
                     ) : (
                       <button className="subtle-action small-action" type="button" onClick={() => startEditGoal(goal)}>
-                        Edit Amount
+                        Edit
                       </button>
                     )}
                   </div>
@@ -1789,39 +2554,53 @@ function DashboardShell({
     const isStocksTab = activeInvestmentTab === "Stocks";
     const isInternationalTab = activeInvestmentTab === "International Investment";
 
+    const categoryPills = (
+      <div className="section-pills investment-category-pills" aria-label="Investment categories">
+        {investmentTabNames.map((tabName) => (
+          <button
+            key={tabName}
+            className={activeInvestmentTab === tabName ? "active" : ""}
+            type="button"
+            onClick={() => {
+              setActiveInvestmentTab(tabName);
+              setEditingHoldingId(null);
+            }}
+          >
+            {tabName}
+          </button>
+        ))}
+      </div>
+    );
+
     if (!isMutualFundsTab && !isStocksTab && !isInternationalTab) {
       return (
-        <section className="workspace-panel">
-          <div>
-            <p className="eyebrow">Investment</p>
-            <h2>Track investment categories</h2>
-          </div>
-          <div className="section-pills" aria-label="Investment categories">
-            {investmentTabNames.map((tabName) => (
-              <button key={tabName} className={activeInvestmentTab === tabName ? "active" : ""} type="button" onClick={() => setActiveInvestmentTab(tabName)}>
-                {tabName}
-              </button>
-            ))}
-          </div>
-          <div className="data-list">
-            {investmentTransactions.length === 0 ? (
-              <p>No transactions for {activeInvestmentTab} yet.</p>
-            ) : (
-              investmentTransactions.slice(0, 10).map((transaction) => (
-                <article key={transaction.id} className="data-row">
-                  <div>
-                    <strong>{transaction.merchant || activeInvestmentTab}</strong>
-                    <p>{new Date(transaction.date).toLocaleString()}</p>
-                  </div>
-                  <span className={transactionAmountClass(transaction.transaction_type)}>
-                    {transactionAmountPrefix(transaction.transaction_type)}
-                    {formatCurrency(parseAmount(transaction.amount))}
-                  </span>
-                </article>
-              ))
-            )}
-          </div>
-        </section>
+        <div className="investment-section-shell">
+          {categoryPills}
+          <section className="workspace-panel">
+            <div>
+              <p className="eyebrow">Investment</p>
+              <h2>Track investment categories</h2>
+            </div>
+            <div className="data-list">
+              {investmentTransactions.length === 0 ? (
+                <p>No transactions for {activeInvestmentTab} yet.</p>
+              ) : (
+                investmentTransactions.slice(0, 10).map((transaction) => (
+                  <article key={transaction.id} className="data-row">
+                    <div>
+                      <strong>{transaction.merchant || activeInvestmentTab}</strong>
+                      <p>{new Date(transaction.date).toLocaleDateString()}</p>
+                    </div>
+                    <span className={transactionAmountClass(transaction.transaction_type)}>
+                      {transactionAmountPrefix(transaction.transaction_type)}
+                      {formatCurrency(parseAmount(transaction.amount))}
+                    </span>
+                  </article>
+                ))
+              )}
+            </div>
+          </section>
+        </div>
       );
     }
 
@@ -1836,17 +2615,12 @@ function DashboardShell({
     const totalPnlPercent = parseAmount(activePortfolio?.total_pnl_percent ?? "0");
 
     return (
-      <section className="workspace-panel">
+      <div className="investment-section-shell">
+        {categoryPills}
+        <section className="workspace-panel">
         <div>
           <p className="eyebrow">Investment</p>
           <h2>{isMutualFundsTab ? "Mutual fund portfolio" : isStocksTab ? "Stock portfolio" : "International portfolio"}</h2>
-        </div>
-        <div className="section-pills" aria-label="Investment categories">
-          {investmentTabNames.map((tabName) => (
-            <button key={tabName} className={activeInvestmentTab === tabName ? "active" : ""} type="button" onClick={() => setActiveInvestmentTab(tabName)}>
-              {tabName}
-            </button>
-          ))}
         </div>
 
         {isMutualFundsTab && (
@@ -1914,57 +2688,59 @@ function DashboardShell({
                   <p>Select a mutual fund from the search results above.</p>
                 )}
               </div>
-              <label>
-                Goal tag
-                <select value={mutualFundForm.goalId} onChange={(event) => setMutualFundForm({ ...mutualFundForm, goalId: event.target.value })}>
-                  <option value="">No goal</option>
-                  {goals.map((goal) => (
-                    <option key={goal.id} value={goal.id}>
-                      {goal.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Category
-                <select
-                  value={mutualFundForm.categoryOptionId}
-                  onChange={(event) => setMutualFundForm({ ...mutualFundForm, categoryOptionId: event.target.value })}
-                >
-                  <option value="">No category</option>
-                  {investmentOptions.mutual_fund_categories.map((option) => (
-                    <option key={option.id} value={option.id}>
-                      {option.display_name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Units
-                <input
-                  required
-                  min="0.001"
-                  step="0.001"
-                  type="number"
-                  value={mutualFundForm.units}
-                  onChange={(event) => setMutualFundForm({ ...mutualFundForm, units: event.target.value })}
-                />
-              </label>
-              <label>
-                Avg buy price
-                <input
-                  required
-                  min="0.001"
-                  step="0.001"
-                  type="number"
-                  value={mutualFundForm.avgPrice}
-                  onChange={(event) => setMutualFundForm({ ...mutualFundForm, avgPrice: event.target.value })}
-                />
-              </label>
-              <button className="primary-action" disabled={savingMutualFundInvestment || !selectedMutualFund} type="submit">
-                {savingMutualFundInvestment && <Loader2 className="spin" size={16} />}
-                {savingMutualFundInvestment ? "Saving" : "Add investment"}
-              </button>
+              <div className="investment-inline-fields">
+                <label>
+                  Goal tag
+                  <select value={mutualFundForm.goalId} onChange={(event) => setMutualFundForm({ ...mutualFundForm, goalId: event.target.value })}>
+                    <option value="">No goal</option>
+                    {goals.map((goal) => (
+                      <option key={goal.id} value={goal.id}>
+                        {goal.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Category
+                  <select
+                    value={mutualFundForm.categoryOptionId}
+                    onChange={(event) => setMutualFundForm({ ...mutualFundForm, categoryOptionId: event.target.value })}
+                  >
+                    <option value="">No category</option>
+                    {investmentOptions.mutual_fund_categories.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.display_name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Units
+                  <input
+                    required
+                    min="0.001"
+                    step="0.001"
+                    type="number"
+                    value={mutualFundForm.units}
+                    onChange={(event) => setMutualFundForm({ ...mutualFundForm, units: event.target.value })}
+                  />
+                </label>
+                <label>
+                  Avg buy price
+                  <input
+                    required
+                    min="0.001"
+                    step="0.001"
+                    type="number"
+                    value={mutualFundForm.avgPrice}
+                    onChange={(event) => setMutualFundForm({ ...mutualFundForm, avgPrice: event.target.value })}
+                  />
+                </label>
+                <button className="primary-action" disabled={savingMutualFundInvestment || !selectedMutualFund} type="submit">
+                  {savingMutualFundInvestment && <Loader2 className="spin" size={16} />}
+                  {savingMutualFundInvestment ? "Saving" : "Add investment"}
+                </button>
+              </div>
             </form>
 
             <section className="dashboard-grid investment-summary-grid" aria-label="Investment summary">
@@ -1994,7 +2770,7 @@ function DashboardShell({
                       <th>Scheme Code</th>
                       <th>Units</th>
                       <th>Avg. NAV</th>
-                      <th>Catagory</th>
+                      <th>Category</th>
                       <th>Scheme Name</th>
                       <th>NAV</th>
                       <th>NAV Date</th>
@@ -2003,17 +2779,45 @@ function DashboardShell({
                       <th>Abs. P&amp;L</th>
                       <th>Abs. P&amp;L %</th>
                       <th>Goal</th>
+                      <th>Edit</th>
                     </tr>
                   </thead>
                   <tbody>
                     {mutualFundPortfolio.holdings.map((holding) => {
                       const pnlValue = parseAmount(holding.pnl);
                       const pnlPercent = parseAmount(holding.pnl_percent);
+                      const isEditing = editingHoldingId === holding.id;
                       return (
                         <tr key={holding.id}>
                           <td>{holding.scheme_code}</td>
-                          <td>{holding.units}</td>
-                          <td>{holding.avg_price}</td>
+                          <td>
+                            {isEditing ? (
+                              <input
+                                className="table-edit-input"
+                                min="0.001"
+                                step="0.001"
+                                type="number"
+                                value={holdingEditForm.unitsOrQuantity}
+                                onChange={(event) => setHoldingEditForm({ ...holdingEditForm, unitsOrQuantity: event.target.value })}
+                              />
+                            ) : (
+                              holding.units
+                            )}
+                          </td>
+                          <td>
+                            {isEditing ? (
+                              <input
+                                className="table-edit-input"
+                                min="0.001"
+                                step="0.001"
+                                type="number"
+                                value={holdingEditForm.avgPrice}
+                                onChange={(event) => setHoldingEditForm({ ...holdingEditForm, avgPrice: event.target.value })}
+                              />
+                            ) : (
+                              holding.avg_price
+                            )}
+                          </td>
                           <td>{holding.category_name ?? "-"}</td>
                           <td title={holding.scheme_name} className="table-text-ellipsis">{holding.scheme_name}</td>
                           <td>{holding.nav ?? "-"}</td>
@@ -2026,6 +2830,26 @@ function DashboardShell({
                             {pnlPercent.toFixed(2)}%
                           </td>
                           <td>{holding.goal_name ?? "-"}</td>
+                          <td>
+                            {isEditing ? (
+                              <form className="inline-actions holding-edit-actions" onSubmit={submitHoldingEdit}>
+                                <button className="subtle-action small-action" type="submit" disabled={savingHoldingEdit}>
+                                  {savingHoldingEdit ? "Saving" : "Save"}
+                                </button>
+                                <button className="subtle-action small-action" type="button" onClick={() => setEditingHoldingId(null)}>
+                                  Cancel
+                                </button>
+                              </form>
+                            ) : (
+                              <button
+                                className="subtle-action small-action"
+                                type="button"
+                                onClick={() => startEditHolding(holding.id, holding.units, holding.avg_price)}
+                              >
+                                <Pencil size={14} />
+                              </button>
+                            )}
+                          </td>
                         </tr>
                       );
                     })}
@@ -2051,60 +2875,62 @@ function DashboardShell({
                 Exchange
                 <input placeholder="NSE, BSE" value={stockForm.exchange} onChange={(event) => setStockForm({ ...stockForm, exchange: event.target.value })} />
               </label>
-              <label>
-                Goal tag
-                <select value={stockForm.goalId} onChange={(event) => setStockForm({ ...stockForm, goalId: event.target.value })}>
-                  <option value="">No goal</option>
-                  {goals.map((goal) => (
-                    <option key={goal.id} value={goal.id}>
-                      {goal.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Sector
-                <select
-                  value={stockForm.sectorOptionId}
-                  onChange={(event) => setStockForm({ ...stockForm, sectorOptionId: event.target.value })}
-                >
-                  <option value="">No sector</option>
-                  {investmentOptions.stock_sectors.map((option) => (
-                    <option key={option.id} value={option.id}>
-                      {option.display_name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Quantity
-                <input required min="0.001" step="0.001" type="number" value={stockForm.quantity} onChange={(event) => setStockForm({ ...stockForm, quantity: event.target.value })} />
-              </label>
-              <label>
-                Avg buy price
-                <input required min="0.001" step="0.001" type="number" value={stockForm.avgPrice} onChange={(event) => setStockForm({ ...stockForm, avgPrice: event.target.value })} />
-              </label>
-              <label>
-                Current price
-                <div className="inline-actions">
-                  <input
-                    required
-                    min="0.001"
-                    step="0.001"
-                    type="number"
-                    value={stockForm.currentPrice}
-                    onChange={(event) => setStockForm({ ...stockForm, currentPrice: event.target.value })}
-                  />
-                  <button className="subtle-action small-action" type="button" disabled={loadingStockPrice} onClick={() => void fetchStockCurrentPrice()}>
-                    {loadingStockPrice && <Loader2 className="spin" size={14} />}
-                    {loadingStockPrice ? "Fetching" : "Auto"}
-                  </button>
-                </div>
-              </label>
-              <button className="primary-action" disabled={savingStockInvestment} type="submit">
-                {savingStockInvestment && <Loader2 className="spin" size={16} />}
-                {savingStockInvestment ? "Saving" : "Add stock"}
-              </button>
+              <div className="investment-inline-fields stock-inline-fields">
+                <label>
+                  Goal tag
+                  <select value={stockForm.goalId} onChange={(event) => setStockForm({ ...stockForm, goalId: event.target.value })}>
+                    <option value="">No goal</option>
+                    {goals.map((goal) => (
+                      <option key={goal.id} value={goal.id}>
+                        {goal.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Sector
+                  <select
+                    value={stockForm.sectorOptionId}
+                    onChange={(event) => setStockForm({ ...stockForm, sectorOptionId: event.target.value })}
+                  >
+                    <option value="">No sector</option>
+                    {investmentOptions.stock_sectors.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.display_name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Quantity
+                  <input required min="0.001" step="0.001" type="number" value={stockForm.quantity} onChange={(event) => setStockForm({ ...stockForm, quantity: event.target.value })} />
+                </label>
+                <label>
+                  Avg buy price
+                  <input required min="0.001" step="0.001" type="number" value={stockForm.avgPrice} onChange={(event) => setStockForm({ ...stockForm, avgPrice: event.target.value })} />
+                </label>
+                <label>
+                  Current price
+                  <div className="inline-actions">
+                    <input
+                      required
+                      min="0.001"
+                      step="0.001"
+                      type="number"
+                      value={stockForm.currentPrice}
+                      onChange={(event) => setStockForm({ ...stockForm, currentPrice: event.target.value })}
+                    />
+                    <button className="subtle-action small-action" type="button" disabled={loadingStockPrice} onClick={() => void fetchStockCurrentPrice()}>
+                      {loadingStockPrice && <Loader2 className="spin" size={14} />}
+                      {loadingStockPrice ? "Fetching" : "Auto"}
+                    </button>
+                  </div>
+                </label>
+                <button className="primary-action" disabled={savingStockInvestment} type="submit">
+                  {savingStockInvestment && <Loader2 className="spin" size={16} />}
+                  {savingStockInvestment ? "Saving" : "Add stock"}
+                </button>
+              </div>
             </form>
             <section className="dashboard-grid investment-summary-grid" aria-label="Investment summary">
               <article>
@@ -2140,17 +2966,45 @@ function DashboardShell({
                       <th>Abs P&amp;L</th>
                       <th>Abs.P&amp;L %</th>
                       <th>Goal</th>
+                      <th>Edit</th>
                     </tr>
                   </thead>
                   <tbody>
                     {stockPortfolio.holdings.map((holding) => {
                       const pnlValue = parseAmount(holding.pnl);
                       const pnlPercent = parseAmount(holding.pnl_percent);
+                      const isEditing = editingHoldingId === holding.id;
                       return (
                         <tr key={holding.id}>
                           <td>{holding.symbol}</td>
-                          <td>{holding.quantity}</td>
-                          <td>{holding.avg_price}</td>
+                          <td>
+                            {isEditing ? (
+                              <input
+                                className="table-edit-input"
+                                min="0.001"
+                                step="0.001"
+                                type="number"
+                                value={holdingEditForm.unitsOrQuantity}
+                                onChange={(event) => setHoldingEditForm({ ...holdingEditForm, unitsOrQuantity: event.target.value })}
+                              />
+                            ) : (
+                              holding.quantity
+                            )}
+                          </td>
+                          <td>
+                            {isEditing ? (
+                              <input
+                                className="table-edit-input"
+                                min="0.001"
+                                step="0.001"
+                                type="number"
+                                value={holdingEditForm.avgPrice}
+                                onChange={(event) => setHoldingEditForm({ ...holdingEditForm, avgPrice: event.target.value })}
+                              />
+                            ) : (
+                              holding.avg_price
+                            )}
+                          </td>
                           <td>{holding.sector_name ?? "-"}</td>
                           <td title={holding.company_name ?? "Stock"} className="table-text-ellipsis">
                             {holding.company_name ?? "Stock"}
@@ -2164,6 +3018,26 @@ function DashboardShell({
                             {pnlPercent.toFixed(2)}%
                           </td>
                           <td>{holding.goal_name ?? "-"}</td>
+                          <td>
+                            {isEditing ? (
+                              <form className="inline-actions holding-edit-actions" onSubmit={submitHoldingEdit}>
+                                <button className="subtle-action small-action" type="submit" disabled={savingHoldingEdit}>
+                                  {savingHoldingEdit ? "Saving" : "Save"}
+                                </button>
+                                <button className="subtle-action small-action" type="button" onClick={() => setEditingHoldingId(null)}>
+                                  Cancel
+                                </button>
+                              </form>
+                            ) : (
+                              <button
+                                className="subtle-action small-action"
+                                type="button"
+                                onClick={() => startEditHolding(holding.id, holding.quantity, holding.avg_price)}
+                              >
+                                <Pencil size={14} />
+                              </button>
+                            )}
+                          </td>
                         </tr>
                       );
                     })}
@@ -2205,74 +3079,76 @@ function DashboardShell({
                   <option value="index">US Index</option>
                 </select>
               </label>
-              <label>
-                Goal tag
-                <select value={internationalForm.goalId} onChange={(event) => setInternationalForm({ ...internationalForm, goalId: event.target.value })}>
-                  <option value="">No goal</option>
-                  {goals.map((goal) => (
-                    <option key={goal.id} value={goal.id}>
-                      {goal.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Sector
-                <select
-                  value={internationalForm.sectorOptionId}
-                  onChange={(event) => setInternationalForm({ ...internationalForm, sectorOptionId: event.target.value })}
-                >
-                  <option value="">No sector</option>
-                  {investmentOptions.international_sectors.map((option) => (
-                    <option key={option.id} value={option.id}>
-                      {option.display_name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Quantity
-                <input
-                  required
-                  min="0.001"
-                  step="0.001"
-                  type="number"
-                  value={internationalForm.quantity}
-                  onChange={(event) => setInternationalForm({ ...internationalForm, quantity: event.target.value })}
-                />
-              </label>
-              <label>
-                Avg buy price
-                <input
-                  required
-                  min="0.001"
-                  step="0.001"
-                  type="number"
-                  value={internationalForm.avgPrice}
-                  onChange={(event) => setInternationalForm({ ...internationalForm, avgPrice: event.target.value })}
-                />
-              </label>
-              <label>
-                Current price
-                <div className="inline-actions">
+              <div className="investment-inline-fields stock-inline-fields">
+                <label>
+                  Goal tag
+                  <select value={internationalForm.goalId} onChange={(event) => setInternationalForm({ ...internationalForm, goalId: event.target.value })}>
+                    <option value="">No goal</option>
+                    {goals.map((goal) => (
+                      <option key={goal.id} value={goal.id}>
+                        {goal.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Sector
+                  <select
+                    value={internationalForm.sectorOptionId}
+                    onChange={(event) => setInternationalForm({ ...internationalForm, sectorOptionId: event.target.value })}
+                  >
+                    <option value="">No sector</option>
+                    {investmentOptions.international_sectors.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.display_name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Quantity
                   <input
                     required
                     min="0.001"
                     step="0.001"
                     type="number"
-                    value={internationalForm.currentPrice}
-                    onChange={(event) => setInternationalForm({ ...internationalForm, currentPrice: event.target.value })}
+                    value={internationalForm.quantity}
+                    onChange={(event) => setInternationalForm({ ...internationalForm, quantity: event.target.value })}
                   />
-                  <button className="subtle-action small-action" type="button" disabled={loadingInternationalPrice} onClick={() => void fetchInternationalCurrentPrice()}>
-                    {loadingInternationalPrice && <Loader2 className="spin" size={14} />}
-                    {loadingInternationalPrice ? "Fetching" : "Auto"}
-                  </button>
-                </div>
-              </label>
-              <button className="primary-action" disabled={savingInternationalInvestment} type="submit">
-                {savingInternationalInvestment && <Loader2 className="spin" size={16} />}
-                {savingInternationalInvestment ? "Saving" : "Add international"}
-              </button>
+                </label>
+                <label>
+                  Avg buy price
+                  <input
+                    required
+                    min="0.001"
+                    step="0.001"
+                    type="number"
+                    value={internationalForm.avgPrice}
+                    onChange={(event) => setInternationalForm({ ...internationalForm, avgPrice: event.target.value })}
+                  />
+                </label>
+                <label>
+                  Current price
+                  <div className="inline-actions">
+                    <input
+                      required
+                      min="0.001"
+                      step="0.001"
+                      type="number"
+                      value={internationalForm.currentPrice}
+                      onChange={(event) => setInternationalForm({ ...internationalForm, currentPrice: event.target.value })}
+                    />
+                    <button className="subtle-action small-action" type="button" disabled={loadingInternationalPrice} onClick={() => void fetchInternationalCurrentPrice()}>
+                      {loadingInternationalPrice && <Loader2 className="spin" size={14} />}
+                      {loadingInternationalPrice ? "Fetching" : "Auto"}
+                    </button>
+                  </div>
+                </label>
+                <button className="primary-action" disabled={savingInternationalInvestment} type="submit">
+                  {savingInternationalInvestment && <Loader2 className="spin" size={16} />}
+                  {savingInternationalInvestment ? "Saving" : "Add international"}
+                </button>
+              </div>
             </form>
 
             <section className="dashboard-grid investment-summary-grid" aria-label="Investment summary">
@@ -2310,17 +3186,45 @@ function DashboardShell({
                       <th>Abs P&amp;L</th>
                       <th>Abs.P&amp;L %</th>
                       <th>Goal</th>
+                      <th>Edit</th>
                     </tr>
                   </thead>
                   <tbody>
                     {internationalPortfolio.holdings.map((holding) => {
                       const pnlValue = parseAmount(holding.pnl);
                       const pnlPercent = parseAmount(holding.pnl_percent);
+                      const isEditing = editingHoldingId === holding.id;
                       return (
                         <tr key={holding.id}>
                           <td>{holding.symbol}</td>
-                          <td>{holding.quantity}</td>
-                          <td>{holding.avg_price}</td>
+                          <td>
+                            {isEditing ? (
+                              <input
+                                className="table-edit-input"
+                                min="0.001"
+                                step="0.001"
+                                type="number"
+                                value={holdingEditForm.unitsOrQuantity}
+                                onChange={(event) => setHoldingEditForm({ ...holdingEditForm, unitsOrQuantity: event.target.value })}
+                              />
+                            ) : (
+                              holding.quantity
+                            )}
+                          </td>
+                          <td>
+                            {isEditing ? (
+                              <input
+                                className="table-edit-input"
+                                min="0.001"
+                                step="0.001"
+                                type="number"
+                                value={holdingEditForm.avgPrice}
+                                onChange={(event) => setHoldingEditForm({ ...holdingEditForm, avgPrice: event.target.value })}
+                              />
+                            ) : (
+                              holding.avg_price
+                            )}
+                          </td>
                           <td>{holding.sector_name ?? "-"}</td>
                           <td title={holding.security_name ?? holding.symbol} className="table-text-ellipsis">
                             {holding.security_name ?? holding.symbol}
@@ -2334,6 +3238,26 @@ function DashboardShell({
                             {pnlPercent.toFixed(2)}%
                           </td>
                           <td>{holding.goal_name ?? "-"}</td>
+                          <td>
+                            {isEditing ? (
+                              <form className="inline-actions holding-edit-actions" onSubmit={submitHoldingEdit}>
+                                <button className="subtle-action small-action" type="submit" disabled={savingHoldingEdit}>
+                                  {savingHoldingEdit ? "Saving" : "Save"}
+                                </button>
+                                <button className="subtle-action small-action" type="button" onClick={() => setEditingHoldingId(null)}>
+                                  Cancel
+                                </button>
+                              </form>
+                            ) : (
+                              <button
+                                className="subtle-action small-action"
+                                type="button"
+                                onClick={() => startEditHolding(holding.id, holding.quantity, holding.avg_price)}
+                              >
+                                <Pencil size={14} />
+                              </button>
+                            )}
+                          </td>
                         </tr>
                       );
                     })}
@@ -2344,6 +3268,7 @@ function DashboardShell({
           </>
         )}
       </section>
+      </div>
     );
   }
 
@@ -2410,9 +3335,12 @@ function DashboardShell({
   }
 
   const sidebarCollapsed = !sidebarHovered;
+  const showRightRail = activeSection === "Dashboard";
 
   return (
-    <main className={`dashboard-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
+    <main
+      className={`dashboard-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${showRightRail ? "" : "no-right-rail"}`}
+    >
       <aside
         className={`sidebar ${sidebarCollapsed ? "collapsed" : ""}`}
         aria-label="Sidebar"
@@ -2424,8 +3352,8 @@ function DashboardShell({
             <WalletCards size={20} />
           </div>
           <div className="sidebar-brand-copy">
-            <p className="eyebrow">Ledgr</p>
-            <strong>Workspace</strong>
+            <p className="eyebrow">Finance</p>
+            <strong>Ledgr</strong>
           </div>
         </div>
         <nav className="sidebar-nav" aria-label="Workspace sections">
@@ -2442,24 +3370,35 @@ function DashboardShell({
             </button>
           ))}
         </nav>
+        <div className="sidebar-promo">
+          <strong>Stay on track</strong>
+          <p>Review goals and budgets to keep spending intentional.</p>
+          <button className="sidebar-promo-btn" type="button" aria-label="Open goals" onClick={() => onSelectSection("Goal")}>
+            <ArrowRight size={16} />
+          </button>
+        </div>
       </aside>
       <section className="dashboard-main">
         <header className="dashboard-topbar">
           <div>
-            <nav className="breadcrumb" aria-label="Breadcrumb">
-              <span>Workspace</span>
-              <span>/</span>
-              <span>{activeSection}</span>
-            </nav>
             <h1>{activeSection}</h1>
           </div>
           <div className="topbar-actions">
+            {activeSection === "Dashboard" && (
+              <button className="date-range-pill" type="button">
+                {dateRangeLabel}
+                <ChevronDown size={16} />
+              </button>
+            )}
             <button
               className="subtle-action add-transaction-action"
               type="button"
               onClick={() => setShowTransactionComposer((current) => !current)}
             >
               {showTransactionComposer ? "Close transaction" : "Add transaction"}
+            </button>
+            <button className="subtle-action icon-action" type="button" aria-label="Refresh data" title="Refresh data" onClick={() => void loadWorkspace()}>
+              <RefreshCw size={16} />
             </button>
             <button className="subtle-action icon-action" type="button" aria-label="Logout" title="Logout" onClick={onLogout}>
               <LogOut size={16} />
@@ -2472,17 +3411,6 @@ function DashboardShell({
         </header>
         {workspaceMessage && <div className="notice success">{workspaceMessage}</div>}
         {workspaceError && <div className="notice">{workspaceError}</div>}
-        <div className="toolbar-row">
-          <button
-            className="subtle-action icon-action"
-            type="button"
-            aria-label="Refresh data"
-            title="Refresh data"
-            onClick={() => void loadWorkspace()}
-          >
-            <RefreshCw size={16} />
-          </button>
-        </div>
         {showTransactionComposer && (
           <div
             className="modal-backdrop"
@@ -2567,6 +3495,83 @@ function DashboardShell({
         )}
         {renderMainSection()}
       </section>
+      {showRightRail && (
+        <aside className="right-rail" aria-label="Account overview">
+          <div className="rail-header">
+            <button className="rail-icon-btn" type="button" aria-label="Notifications">
+              <Bell size={18} />
+              <span className="notif-dot" />
+            </button>
+            <button className="avatar-btn" type="button" aria-label="Open profile" onClick={() => onSelectSection("Profile")}>
+              {initials}
+            </button>
+          </div>
+
+          <section className="rail-section">
+            <div className="rail-section-header">
+              <h3>Accounts</h3>
+              <button className="rail-link" type="button" onClick={() => onSelectSection("Accounts")}>
+                Manage
+              </button>
+            </div>
+            <div className="account-balance-list">
+              {accounts.length === 0 ? (
+                <p>No accounts yet.</p>
+              ) : (
+                accounts.map((account) => (
+                  <button
+                    key={account.id}
+                    className="account-balance-row"
+                    type="button"
+                    onClick={() => onSelectSection("Accounts")}
+                  >
+                    <div>
+                      <strong>{account.name}</strong>
+                      <p>{account.account_type}</p>
+                    </div>
+                    <span>{formatCurrency(parseAmount(account.current_balance))}</span>
+                  </button>
+                ))
+              )}
+              <button className="account-balance-row add" type="button" onClick={() => onSelectSection("Accounts")}>
+                <span>Add account</span>
+                <Plus size={16} />
+              </button>
+            </div>
+          </section>
+
+          <section className="rail-section">
+            <div className="rail-section-header">
+              <h3>Recent activity</h3>
+              <button className="rail-link" type="button" onClick={() => onSelectSection("Transaction")}>
+                See all
+              </button>
+            </div>
+            <div className="activity-list">
+              {transactions.length === 0 ? (
+                <p>No activity yet.</p>
+              ) : (
+                transactions.slice(0, 5).map((transaction) => {
+                  const label = transaction.merchant || transaction.transaction_type;
+                  return (
+                    <article key={transaction.id} className="activity-item">
+                      <div className="activity-avatar">{label.slice(0, 2).toUpperCase()}</div>
+                      <div className="activity-body">
+                        <strong>{label}</strong>
+                        <p>{new Date(transaction.date).toLocaleDateString()}</p>
+                      </div>
+                      <span className={`activity-amount ${transactionAmountClass(transaction.transaction_type)}`}>
+                        {transactionAmountPrefix(transaction.transaction_type)}
+                        {formatCurrency(parseAmount(transaction.amount))}
+                      </span>
+                    </article>
+                  );
+                })
+              )}
+            </div>
+          </section>
+        </aside>
+      )}
     </main>
   );
 }

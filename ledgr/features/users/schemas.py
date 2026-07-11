@@ -4,7 +4,7 @@ from typing import Optional
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field, EmailStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, EmailStr, model_validator
 
 
 # Never expose user IDs or other internal identifiers in API responses
@@ -171,8 +171,11 @@ class TagCreate(BaseModel):
 
 
 class TagResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: UUID
-    user_id: UUID
+    user_id: Optional[UUID] = None
+    is_global: bool = False
     name: str
     is_active: bool
     color: Optional[str] = Field(default=None, max_length=7)  # Hex color code
@@ -188,10 +191,14 @@ class GoalCreate(BaseModel):
 
 
 class GoalUpdate(BaseModel):
-    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
     target_amount: Optional[Decimal] = None
     current_amount: Optional[Decimal] = None
     target_date: Optional[datetime] = None
+
+
+class GoalTemplateResponse(BaseModel):
+    name: str
+    target_amount: Decimal
 
 
 class GoalResponse(BaseModel):
@@ -235,3 +242,18 @@ class BudgetResponse(BaseModel):
     updated_at: datetime
     spent_amount: Decimal = Field(default=Decimal("0.00"))
     remaining_amount: Decimal = Field(default=Decimal("0.00"))
+
+
+class NetWorthHistoryPoint(BaseModel):
+    date: str
+    net_worth: Decimal
+
+
+class NetWorthOverviewResponse(BaseModel):
+    net_worth: Decimal
+    accounts_value: Decimal
+    mutual_funds_value: Decimal
+    stocks_value: Decimal
+    international_value: Decimal
+    as_of: datetime
+    history: list[NetWorthHistoryPoint]

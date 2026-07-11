@@ -15,13 +15,18 @@ import type {
   CreateTransactionResponse,
   SetupDefaultOpeningBalancesPayload,
   UpdateAccountPayload,
+  UpdateInternationalInvestmentPayload,
+  UpdateMutualFundInvestmentPayload,
+  UpdateStockInvestmentPayload,
   UpdateTransactionPayload,
   Goal,
+  GoalTemplate,
   InvestmentOptionsCatalog,
   LoginPayload,
   MutualFundInvestment,
   MutualFundPortfolio,
   MutualFundSearchItem,
+  NetWorthOverview,
   RegisterPayload,
   TokenResponse,
   Transaction,
@@ -29,7 +34,8 @@ import type {
   StockInvestment,
   StockPortfolio,
   InternationalInvestment,
-  InternationalPortfolio
+  InternationalPortfolio,
+  Tag
 } from "./types";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? "";
@@ -112,6 +118,8 @@ export const api = {
   },
   me: (token: string) => request<UserProfile>("/users/me", { token }),
   listAccounts: (token: string) => request<Account[]>("/users/setup/accounts", { token }),
+  getNetWorth: (token: string, days = 30) =>
+    request<NetWorthOverview>(`/users/net-worth?days=${encodeURIComponent(String(days))}`, { token }),
   createAccount: (token: string, body: CreateAccountPayload) =>
     request<Account>("/users/setup/accounts", { method: "POST", token, body }),
   setupDefaultOpeningBalances: (token: string, body: SetupDefaultOpeningBalancesPayload) =>
@@ -119,7 +127,9 @@ export const api = {
   updateAccount: (token: string, accountId: number, body: UpdateAccountPayload) =>
     request<Account>(`/users/setup/accounts/${accountId}`, { method: "PATCH", token, body }),
   listCategories: (token: string) => request<CategoryGroups>("/users/setup/categories", { token }),
+  listTags: (token: string) => request<Tag[]>("/users/setup/tags", { token }),
   listGoals: (token: string) => request<Goal[]>("/goals", { token }),
+  listGoalTemplates: (token: string) => request<GoalTemplate[]>("/goals/templates", { token }),
   createGoal: (token: string, body: CreateGoalPayload) =>
     request<Goal>("/goals", { method: "POST", token, body }),
   updateGoal: (token: string, goalId: string, body: UpdateGoalPayload) =>
@@ -139,9 +149,13 @@ export const api = {
     ),
   createMutualFundInvestment: (token: string, body: CreateMutualFundInvestmentPayload) =>
     request<MutualFundInvestment>("/investments/mutual-funds", { method: "POST", token, body }),
+  updateMutualFundInvestment: (token: string, investmentId: string, body: UpdateMutualFundInvestmentPayload) =>
+    request<MutualFundInvestment>(`/investments/mutual-funds/${investmentId}`, { method: "PATCH", token, body }),
   listMutualFundPortfolio: (token: string) => request<MutualFundPortfolio>("/investments/mutual-funds", { token }),
   createStockInvestment: (token: string, body: CreateStockInvestmentPayload) =>
     request<StockInvestment>("/investments/stocks", { method: "POST", token, body }),
+  updateStockInvestment: (token: string, investmentId: string, body: UpdateStockInvestmentPayload) =>
+    request<StockInvestment>(`/investments/stocks/${investmentId}`, { method: "PATCH", token, body }),
   listStockPortfolio: (token: string) => request<StockPortfolio>("/investments/stocks", { token }),
   fetchStockCurrentPrice: (token: string, symbol: string, exchange?: string) =>
     request<CurrentPrice>(
@@ -150,6 +164,8 @@ export const api = {
     ),
   createInternationalInvestment: (token: string, body: CreateInternationalInvestmentPayload) =>
     request<InternationalInvestment>("/investments/international", { method: "POST", token, body }),
+  updateInternationalInvestment: (token: string, investmentId: string, body: UpdateInternationalInvestmentPayload) =>
+    request<InternationalInvestment>(`/investments/international/${investmentId}`, { method: "PATCH", token, body }),
   listInternationalPortfolio: (token: string) => request<InternationalPortfolio>("/investments/international", { token }),
   fetchInternationalCurrentPrice: (token: string, symbol: string) =>
     request<CurrentPrice>(`/investments/international/current-price?symbol=${encodeURIComponent(symbol)}`, { token }),

@@ -23,12 +23,15 @@ from ledgr.features.investments.schemas import (
     InvestmentOptionsCatalogResponse,
     InternationalInvestmentHolding,
     InternationalInvestmentPortfolioResponse,
+    InternationalInvestmentUpdateRequest,
     InternationalInvestmentUpsertRequest,
     MutualFundInvestmentHolding,
     MutualFundInvestmentPortfolioResponse,
+    MutualFundInvestmentUpdateRequest,
     MutualFundInvestmentUpsertRequest,
     StockInvestmentHolding,
     StockInvestmentPortfolioResponse,
+    StockInvestmentUpdateRequest,
     StockInvestmentUpsertRequest,
 )
 from ledgr.features.users.models import GoalModel
@@ -637,6 +640,94 @@ def list_international_portfolio(
         total_pnl=total_pnl,
         total_pnl_percent=total_pnl_percent,
     )
+
+
+def update_mutual_fund_investment(
+    *,
+    session: Session,
+    user_id: UUID,
+    investment_id: UUID,
+    payload: MutualFundInvestmentUpdateRequest,
+) -> MutualFundInvestmentModel:
+    investment = session.get(MutualFundInvestmentModel, investment_id)
+    if investment is None or investment.user_id != user_id:
+        raise LookupError("Mutual fund investment not found")
+
+    previous_goal_id = investment.goal_id
+    investment.units = quantize_three_places(payload.units)
+    investment.avg_price = quantize_three_places(payload.avg_price)
+    if "goal_id" in payload.model_fields_set:
+        investment.goal_id = payload.goal_id
+    if "category_option_id" in payload.model_fields_set:
+        investment.category_option_id = payload.category_option_id
+
+    session.add(investment)
+    session.commit()
+    session.refresh(investment)
+    recalculate_goal_current_amount(session=session, user_id=user_id, goal_id=investment.goal_id)
+    if previous_goal_id is not None and previous_goal_id != investment.goal_id:
+        recalculate_goal_current_amount(session=session, user_id=user_id, goal_id=previous_goal_id)
+    return investment
+
+
+def update_stock_investment(
+    *,
+    session: Session,
+    user_id: UUID,
+    investment_id: UUID,
+    payload: StockInvestmentUpdateRequest,
+) -> StockInvestmentModel:
+    investment = session.get(StockInvestmentModel, investment_id)
+    if investment is None or investment.user_id != user_id:
+        raise LookupError("Stock investment not found")
+
+    previous_goal_id = investment.goal_id
+    investment.quantity = quantize_three_places(payload.quantity)
+    investment.avg_price = quantize_three_places(payload.avg_price)
+    if payload.current_price is not None:
+        investment.current_price = quantize_three_places(payload.current_price)
+    if "goal_id" in payload.model_fields_set:
+        investment.goal_id = payload.goal_id
+    if "sector_option_id" in payload.model_fields_set:
+        investment.sector_option_id = payload.sector_option_id
+
+    session.add(investment)
+    session.commit()
+    session.refresh(investment)
+    recalculate_goal_current_amount(session=session, user_id=user_id, goal_id=investment.goal_id)
+    if previous_goal_id is not None and previous_goal_id != investment.goal_id:
+        recalculate_goal_current_amount(session=session, user_id=user_id, goal_id=previous_goal_id)
+    return investment
+
+
+def update_international_investment(
+    *,
+    session: Session,
+    user_id: UUID,
+    investment_id: UUID,
+    payload: InternationalInvestmentUpdateRequest,
+) -> InternationalInvestmentModel:
+    investment = session.get(InternationalInvestmentModel, investment_id)
+    if investment is None or investment.user_id != user_id:
+        raise LookupError("International investment not found")
+
+    previous_goal_id = investment.goal_id
+    investment.quantity = quantize_three_places(payload.quantity)
+    investment.avg_price = quantize_three_places(payload.avg_price)
+    if payload.current_price is not None:
+        investment.current_price = quantize_three_places(payload.current_price)
+    if "goal_id" in payload.model_fields_set:
+        investment.goal_id = payload.goal_id
+    if "sector_option_id" in payload.model_fields_set:
+        investment.sector_option_id = payload.sector_option_id
+
+    session.add(investment)
+    session.commit()
+    session.refresh(investment)
+    recalculate_goal_current_amount(session=session, user_id=user_id, goal_id=investment.goal_id)
+    if previous_goal_id is not None and previous_goal_id != investment.goal_id:
+        recalculate_goal_current_amount(session=session, user_id=user_id, goal_id=previous_goal_id)
+    return investment
 
 
 def recalculate_goal_current_amount(*, session: Session, user_id: UUID, goal_id: Optional[UUID]) -> None:

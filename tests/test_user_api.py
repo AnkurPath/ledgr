@@ -513,6 +513,14 @@ def test_create_and_list_goals_for_current_user() -> None:
     token = register_user(client)
     headers = auth_headers(token)
 
+    listed_before = client.get("/goals", headers=headers)
+    assert listed_before.status_code == 200
+    assert listed_before.json() == []
+
+    templates = client.get("/goals/templates", headers=headers)
+    assert templates.status_code == 200
+    assert any(goal["name"] == "Emergency Fund" for goal in templates.json())
+
     created = client.post(
         "/users/setup/goals",
         json={"name": "New Camera Fund", "target_amount": "200000.00", "current_amount": "25000.00"},
@@ -525,6 +533,60 @@ def test_create_and_list_goals_for_current_user() -> None:
     assert created.json()["target_amount"] == "200000.00"
     assert listed.status_code == 200
     assert "New Camera Fund" in [goal["name"] for goal in listed.json()]
+    assert "Emergency Fund" not in [goal["name"] for goal in listed.json()]
+
+
+def test_update_goal_amount_and_target_date() -> None:
+    client = make_test_client()
+    token = register_user(client)
+    headers = auth_headers(token)
+
+    created = client.post(
+        "/goals",
+        json={"name": "Laptop", "target_amount": "80000.00", "current_amount": "10000.00"},
+        headers=headers,
+    )
+    assert created.status_code == 201
+    goal_id = created.json()["id"]
+
+    updated = client.patch(
+        f"/goals/{goal_id}",
+        json={"target_amount": "90000.00", "current_amount": "15000.00", "target_date": "2027-01-15T00:00:00Z"},
+        headers=headers,
+    )
+    assert updated.status_code == 200
+    body = updated.json()
+    assert body["name"] == "Laptop"
+    assert body["target_amount"] == "90000.00"
+    assert body["current_amount"] == "15000.00"
+    assert body["target_date"].startswith("2027-01-15")
+
+
+def test_net_worth_includes_investments_and_history() -> None:
+    client = make_test_client()
+    token = register_user(client, email="networth@example.com")
+    headers = auth_headers(token)
+
+    stock = client.post(
+        "/investments/stocks",
+        json={
+            "symbol": "INFY",
+            "company_name": "Infosys",
+            "quantity": "1.000",
+            "avg_price": "100.000",
+            "current_price": "120.000",
+        },
+        headers=headers,
+    )
+    assert stock.status_code == 201
+
+    response = client.get("/users/net-worth?days=7", headers=headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["stocks_value"] == "120.00"
+    assert body["net_worth"] == "120.00"
+    assert len(body["history"]) == 7
+    assert body["history"][-1]["net_worth"] == "120.00"
 
 
 def test_goals_are_scoped_to_current_user() -> None:

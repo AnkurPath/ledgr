@@ -23,6 +23,13 @@ class MutualFundInvestmentUpsertRequest(BaseModel):
     avg_price: Decimal = Field(gt=0)
 
 
+class MutualFundInvestmentUpdateRequest(BaseModel):
+    units: Decimal = Field(gt=0)
+    avg_price: Decimal = Field(gt=0)
+    goal_id: Optional[UUID] = None
+    category_option_id: Optional[UUID] = None
+
+
 class MutualFundInvestmentUpsertResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -73,6 +80,14 @@ class StockInvestmentUpsertRequest(BaseModel):
     quantity: Decimal = Field(gt=0)
     avg_price: Decimal = Field(gt=0)
     current_price: Optional[Decimal] = Field(default=None, gt=0)
+
+
+class StockInvestmentUpdateRequest(BaseModel):
+    quantity: Decimal = Field(gt=0)
+    avg_price: Decimal = Field(gt=0)
+    current_price: Optional[Decimal] = Field(default=None, gt=0)
+    goal_id: Optional[UUID] = None
+    sector_option_id: Optional[UUID] = None
 
 
 class StockInvestmentUpsertResponse(BaseModel):
@@ -128,6 +143,14 @@ class InternationalInvestmentUpsertRequest(BaseModel):
     quantity: Decimal = Field(gt=0)
     avg_price: Decimal = Field(gt=0)
     current_price: Optional[Decimal] = Field(default=None, gt=0)
+
+
+class InternationalInvestmentUpdateRequest(BaseModel):
+    quantity: Decimal = Field(gt=0)
+    avg_price: Decimal = Field(gt=0)
+    current_price: Optional[Decimal] = Field(default=None, gt=0)
+    goal_id: Optional[UUID] = None
+    sector_option_id: Optional[UUID] = None
 
 
 class InternationalInvestmentUpsertResponse(BaseModel):

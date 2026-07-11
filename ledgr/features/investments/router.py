@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from typing import Optional
+from uuid import UUID
 from sqlmodel import Session
 
 from ledgr.core.db import get_session
@@ -13,13 +14,16 @@ from ledgr.features.investments.schemas import (
     InvestmentOptionResponse,
     InvestmentOptionsCatalogResponse,
     InternationalInvestmentPortfolioResponse,
+    InternationalInvestmentUpdateRequest,
     InternationalInvestmentUpsertRequest,
     InternationalInvestmentUpsertResponse,
     MutualFundInvestmentPortfolioResponse,
+    MutualFundInvestmentUpdateRequest,
     MutualFundInvestmentUpsertRequest,
     MutualFundInvestmentUpsertResponse,
     MutualFundSearchItem,
     StockInvestmentPortfolioResponse,
+    StockInvestmentUpdateRequest,
     StockInvestmentUpsertRequest,
     StockInvestmentUpsertResponse,
 )
@@ -32,6 +36,9 @@ from ledgr.features.investments.service import (
     list_mutual_fund_portfolio,
     list_stock_portfolio,
     search_mutual_funds,
+    update_international_investment,
+    update_mutual_fund_investment,
+    update_stock_investment,
     upsert_international_investment,
     upsert_stock_investment,
     upsert_mutual_fund_investment,
@@ -117,6 +124,39 @@ def list_mutual_fund_investments(
     return list_mutual_fund_portfolio(session=session, user_id=current_user.id)
 
 
+@router.patch("/mutual-funds/{investment_id}", response_model=MutualFundInvestmentUpsertResponse)
+def patch_mutual_fund_investment(
+    investment_id: UUID,
+    payload: MutualFundInvestmentUpdateRequest,
+    session: Session = Depends(get_session),
+    current_user: UserModel = Depends(get_current_user),
+) -> MutualFundInvestmentUpsertResponse:
+    if payload.goal_id is not None:
+        goal = session.get(GoalModel, payload.goal_id)
+        if goal is None or goal.user_id != current_user.id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Goal not found")
+    if payload.category_option_id is not None:
+        category = get_investment_option_by_id(
+            session=session,
+            option_id=payload.category_option_id,
+            asset_type="mutual_fund",
+            field_name="category",
+        )
+        if category is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mutual fund category not found")
+
+    try:
+        investment = update_mutual_fund_investment(
+            session=session,
+            user_id=current_user.id,
+            investment_id=investment_id,
+            payload=payload,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return MutualFundInvestmentUpsertResponse.model_validate(investment, from_attributes=True)
+
+
 @router.post(
     "/stocks",
     response_model=StockInvestmentUpsertResponse,
@@ -155,6 +195,39 @@ def list_stock_investments(
     current_user: UserModel = Depends(get_current_user),
 ) -> StockInvestmentPortfolioResponse:
     return list_stock_portfolio(session=session, user_id=current_user.id)
+
+
+@router.patch("/stocks/{investment_id}", response_model=StockInvestmentUpsertResponse)
+def patch_stock_investment(
+    investment_id: UUID,
+    payload: StockInvestmentUpdateRequest,
+    session: Session = Depends(get_session),
+    current_user: UserModel = Depends(get_current_user),
+) -> StockInvestmentUpsertResponse:
+    if payload.goal_id is not None:
+        goal = session.get(GoalModel, payload.goal_id)
+        if goal is None or goal.user_id != current_user.id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Goal not found")
+    if payload.sector_option_id is not None:
+        sector = get_investment_option_by_id(
+            session=session,
+            option_id=payload.sector_option_id,
+            asset_type="stock",
+            field_name="sector",
+        )
+        if sector is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Stock sector not found")
+
+    try:
+        investment = update_stock_investment(
+            session=session,
+            user_id=current_user.id,
+            investment_id=investment_id,
+            payload=payload,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return StockInvestmentUpsertResponse.model_validate(investment, from_attributes=True)
 
 
 @router.get("/stocks/current-price", response_model=CurrentPriceResponse)
@@ -226,3 +299,36 @@ def list_international_investments(
     current_user: UserModel = Depends(get_current_user),
 ) -> InternationalInvestmentPortfolioResponse:
     return list_international_portfolio(session=session, user_id=current_user.id)
+
+
+@router.patch("/international/{investment_id}", response_model=InternationalInvestmentUpsertResponse)
+def patch_international_investment(
+    investment_id: UUID,
+    payload: InternationalInvestmentUpdateRequest,
+    session: Session = Depends(get_session),
+    current_user: UserModel = Depends(get_current_user),
+) -> InternationalInvestmentUpsertResponse:
+    if payload.goal_id is not None:
+        goal = session.get(GoalModel, payload.goal_id)
+        if goal is None or goal.user_id != current_user.id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Goal not found")
+    if payload.sector_option_id is not None:
+        sector = get_investment_option_by_id(
+            session=session,
+            option_id=payload.sector_option_id,
+            asset_type="international",
+            field_name="sector",
+        )
+        if sector is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="International sector not found")
+
+    try:
+        investment = update_international_investment(
+            session=session,
+            user_id=current_user.id,
+            investment_id=investment_id,
+            payload=payload,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return InternationalInvestmentUpsertResponse.model_validate(investment, from_attributes=True)

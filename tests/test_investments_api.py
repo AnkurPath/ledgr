@@ -134,6 +134,36 @@ def test_add_mutual_fund_investment_updates_weighted_average() -> None:
     assert second.json()["avg_price"] == "106.667"
 
 
+def test_patch_mutual_fund_investment_sets_absolute_units_and_avg_price() -> None:
+    client = make_test_client()
+    token = register_user(client)
+    seed_mutual_funds(client)
+    headers = auth_headers(token)
+
+    created = client.post(
+        "/investments/mutual-funds",
+        json={"scheme_code": 100001, "units": "1.000", "avg_price": "100.000"},
+        headers=headers,
+    )
+    assert created.status_code == 201
+    investment_id = created.json()["id"]
+
+    updated = client.patch(
+        f"/investments/mutual-funds/{investment_id}",
+        json={"units": "5.500", "avg_price": "120.250"},
+        headers=headers,
+    )
+    assert updated.status_code == 200
+    assert updated.json()["units"] == "5.500"
+    assert updated.json()["avg_price"] == "120.250"
+
+    portfolio = client.get("/investments/mutual-funds", headers=headers)
+    assert portfolio.status_code == 200
+    holding = portfolio.json()["holdings"][0]
+    assert holding["units"] == "5.500"
+    assert holding["avg_price"] == "120.250"
+
+
 def test_list_mutual_fund_portfolio_returns_valuation_fields() -> None:
     client = make_test_client()
     token = register_user(client)
@@ -170,10 +200,13 @@ def test_mutual_fund_investment_can_be_tagged_with_goal() -> None:
     seed_mutual_funds(client)
     headers = auth_headers(token)
 
-    goals_response = client.get("/users/setup/goals", headers=headers)
-    assert goals_response.status_code == 200
-    goals = goals_response.json()
-    retirement_goal = next(goal for goal in goals if goal["name"] == "Retirement")
+    goal_response = client.post(
+        "/goals",
+        json={"name": "Retirement", "target_amount": "5000000.00"},
+        headers=headers,
+    )
+    assert goal_response.status_code == 201
+    retirement_goal = goal_response.json()
 
     create_response = client.post(
         "/investments/mutual-funds",
@@ -200,10 +233,13 @@ def test_add_stock_investment_and_list_portfolio() -> None:
     token = register_user(client, email="stocks@example.com")
     headers = auth_headers(token)
 
-    goals_response = client.get("/users/setup/goals", headers=headers)
-    assert goals_response.status_code == 200
-    goals = goals_response.json()
-    travel_goal = next(goal for goal in goals if goal["name"] == "Travel")
+    goal_response = client.post(
+        "/goals",
+        json={"name": "Travel", "target_amount": "300000.00"},
+        headers=headers,
+    )
+    assert goal_response.status_code == 201
+    travel_goal = goal_response.json()
 
     create_response = client.post(
         "/investments/stocks",

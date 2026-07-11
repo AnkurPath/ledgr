@@ -5,11 +5,19 @@ from uuid import UUID
 
 from ledgr.core.db import get_session
 from ledgr.core.security import get_current_user
-from ledgr.features.goals.service import ensure_predefined_goals
+from ledgr.features.goals.service import list_goal_templates
 from ledgr.features.users.models import GoalModel, UserModel
-from ledgr.features.users.schemas import GoalCreate, GoalResponse, GoalUpdate
+from ledgr.features.users.schemas import GoalCreate, GoalResponse, GoalTemplateResponse, GoalUpdate
 
 router = APIRouter(prefix="/goals", tags=["goals"])
+
+
+@router.get("/templates", response_model=list[GoalTemplateResponse])
+def get_goal_templates(
+    current_user: UserModel = Depends(get_current_user),
+) -> list[GoalTemplateResponse]:
+    del current_user
+    return [GoalTemplateResponse(**template) for template in list_goal_templates()]
 
 
 @router.get("", response_model=list[GoalResponse])
@@ -17,7 +25,6 @@ def list_goals(
     session: Session = Depends(get_session),
     current_user: UserModel = Depends(get_current_user),
 ) -> list[GoalModel]:
-    ensure_predefined_goals(session, current_user.id)
     statement = select(GoalModel).where(GoalModel.user_id == current_user.id)
     return list(session.exec(statement).all())
 
@@ -61,10 +68,6 @@ def update_goal(
         setattr(goal, field, value)
 
     session.add(goal)
-    try:
-        session.commit()
-    except IntegrityError:
-        session.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Goal already exists for this user")
+    session.commit()
     session.refresh(goal)
     return goal

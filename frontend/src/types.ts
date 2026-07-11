@@ -86,6 +86,17 @@ export type Category = {
 
 export type CategoryGroups = Record<CategoryKind, Category[]>;
 
+export type Tag = {
+  id: string;
+  user_id: string | null;
+  is_global: boolean;
+  name: string;
+  is_active: boolean;
+  color: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type Goal = {
   id: string;
   user_id: string;
@@ -121,7 +132,31 @@ export type CreateGoalPayload = {
   target_date?: string | null;
 };
 
-export type UpdateGoalPayload = Partial<CreateGoalPayload>;
+export type UpdateGoalPayload = {
+  target_amount?: string;
+  current_amount?: string;
+  target_date?: string | null;
+};
+
+export type GoalTemplate = {
+  name: string;
+  target_amount: string;
+};
+
+export type NetWorthHistoryPoint = {
+  date: string;
+  net_worth: string;
+};
+
+export type NetWorthOverview = {
+  net_worth: string;
+  accounts_value: string;
+  mutual_funds_value: string;
+  stocks_value: string;
+  international_value: string;
+  as_of: string;
+  history: NetWorthHistoryPoint[];
+};
 
 export type CreateBudgetPayload = {
   name: string;
@@ -142,7 +177,7 @@ export type Transaction = {
   account_id: number;
   transaction_type: TransactionType;
   category_id: number | null;
-  tag_id: number | null;
+  tag_id: string | number | null;
   goal_id: number | null;
   notes: string | null;
   bills: string | null;
@@ -160,7 +195,7 @@ export type CreateTransactionPayload = {
   destination_account_id?: number | null;
   transaction_type: TransactionType;
   category_id?: number | null;
-  tag_id?: number | null;
+  tag_id?: string | number | null;
   goal_id?: number | null;
   notes?: string | null;
   bills?: string | null;
@@ -188,6 +223,13 @@ export type CreateMutualFundInvestmentPayload = {
   category_option_id?: string | null;
   units: string;
   avg_price: string;
+};
+
+export type UpdateMutualFundInvestmentPayload = {
+  units: string;
+  avg_price: string;
+  goal_id?: string | null;
+  category_option_id?: string | null;
 };
 
 export type MutualFundInvestment = {
@@ -238,6 +280,14 @@ export type CreateStockInvestmentPayload = {
   quantity: string;
   avg_price: string;
   current_price?: string;
+};
+
+export type UpdateStockInvestmentPayload = {
+  quantity: string;
+  avg_price: string;
+  current_price?: string;
+  goal_id?: string | null;
+  sector_option_id?: string | null;
 };
 
 export type StockInvestment = {
@@ -312,6 +362,14 @@ export type CreateInternationalInvestmentPayload = {
   quantity: string;
   avg_price: string;
   current_price?: string;
+};
+
+export type UpdateInternationalInvestmentPayload = {
+  quantity: string;
+  avg_price: string;
+  current_price?: string;
+  goal_id?: string | null;
+  sector_option_id?: string | null;
 };
 
 export type InternationalInvestment = {

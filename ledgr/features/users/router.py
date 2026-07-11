@@ -11,7 +11,6 @@ from sqlalchemy.exc import IntegrityError
 
 from ledgr.core.db import get_session
 from ledgr.core.security import ACCESS_TOKEN_EXPIRE_MINUTES, create_access_token, get_password_hash, verify_password, get_current_user
-from ledgr.features.goals.service import ensure_predefined_goals
 from ledgr.features.users.models import AccountModel, BudgetModel, CategoryModel, GoalModel, TagModel, UserModel
 from ledgr.features.transactions.models import TransactionModel
 from ledgr.features.users.schemas import (
@@ -23,8 +22,10 @@ from ledgr.features.users.schemas import (
     CategoryCreate, CategoryGroupsResponse, CategoryResponse,
     GoalCreate, GoalResponse,
     BudgetCreate, BudgetResponse,
-    TagCreate, TagResponse
+    TagCreate, TagResponse,
+    NetWorthOverviewResponse,
 )
+from ledgr.features.users.networth import get_net_worth_overview
 
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -53,7 +54,6 @@ def register_user(payload: UserRegister, session: Session = Depends(get_session)
                     account_type="wallet",
                 )
             )
-        ensure_predefined_goals(session, user.id)
         session.commit()
     except IntegrityError:
         session.rollback()
@@ -315,7 +315,6 @@ def list_goals(
     current_user: UserModel = Depends(get_current_user)
 ) -> list[GoalModel]:
     user_id = current_user.id
-    ensure_predefined_goals(session, user_id)
     statement = select(GoalModel).where(GoalModel.user_id == user_id)
     return list(session.exec(statement).all())
 
@@ -422,3 +421,13 @@ def create_budget(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Budget already exists for this user")
     session.refresh(budget)
     return to_budget_response(session, user_id, budget)
+
+
+@router.get("/net-worth", response_model=NetWorthOverviewResponse)
+def get_net_worth(
+    days: int = Query(default=30, ge=7, le=365),
+    session: Session = Depends(get_session),
+    current_user: UserModel = Depends(get_current_user),
+) -> NetWorthOverviewResponse:
+    overview = get_net_worth_overview(session=session, user_id=current_user.id, days=days)
+    return NetWorthOverviewResponse.model_validate(overview)

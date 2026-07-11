@@ -6,7 +6,7 @@ from sqlmodel import Session, select
 from ledgr.features.users.models import GoalModel
 
 DEFAULT_PREDEFINED_GOALS: tuple[tuple[str, Decimal], ...] = (
-    ("Emergency Fund (12 months)", Decimal("600000.00")),
+    ("Emergency Fund", Decimal("600000.00")),
     ("Retirement", Decimal("5000000.00")),
     ("Home", Decimal("3000000.00")),
     ("Car", Decimal("1000000.00")),
@@ -16,7 +16,15 @@ DEFAULT_PREDEFINED_GOALS: tuple[tuple[str, Decimal], ...] = (
 )
 
 
+def list_goal_templates() -> list[dict[str, str]]:
+    return [
+        {"name": goal_name, "target_amount": f"{target_amount:.2f}"}
+        for goal_name, target_amount in DEFAULT_PREDEFINED_GOALS
+    ]
+
+
 def ensure_predefined_goals(session: Session, user_id: UUID) -> None:
+    """Legacy helper kept for tests/migrations; prefer templates + explicit create."""
     existing_names = set(session.exec(select(GoalModel.name).where(GoalModel.user_id == user_id)).all())
     missing_goals = [
         GoalModel(
