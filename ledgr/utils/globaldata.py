@@ -1,12 +1,15 @@
-import json
-import urllib.request
-from typing import Any
-
 from sqlmodel import Session, select
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from ledgr.features.users.models import CategoryModel, TagModel
 from ledgr.features.investments.models import MutualFundDataModel
+from ledgr.utils.mfdata import (
+    AMFI_NAV_ALL_URL,
+    fetch_amfi_navall_text,
+    parse_amfi_navall_text,
+)
+
+MF_BULK_INSERT_CHUNK_SIZE = 2000
 
 DEFAULT_CATEGORIES = [
     # INCOME
@@ -119,35 +122,15 @@ def seed_global_tags(session: Session):
     print("Successfully seeded global tags.")
 
 def seed_mf_data(session: Session):
-    url = "https://api.mfapi.in/mf"
+    url = AMFI_NAV_ALL_URL
     existing = session.exec(select(MutualFundDataModel.scheme_code).limit(1)).first()
     if existing is not None:
         print("MF data already seeded.")
         return
 
     try:
-        response = urllib.request.urlopen(url, timeout=30)
-        data = json.loads(response.read().decode("utf-8"))
-        if not isinstance(data, list):
-            print("Unexpected MF API response shape.")
-            return
-
-        rows: list[dict[str, Any]] = []
-        for mf_data in data:
-            scheme_code = mf_data.get("schemeCode")
-            scheme_name = mf_data.get("schemeName")
-            if scheme_code is None or not scheme_name:
-                # Skip malformed records from upstream API.
-                continue
-
-            rows.append(
-                {
-                    "scheme_code": scheme_code,
-                    "scheme_name": scheme_name,
-                    "isin_growth": mf_data.get("isinGrowth"),
-                    "isin_div_reinvestment": mf_data.get("isinDivReinvestment"),
-                }
-            )
+        raw_text = fetch_amfi_navall_text(timeout=60, source_url=url)
+        rows, failed_rows = parse_amfi_navall_text(raw_text)
 
         if not rows:
             print("No valid MF rows to seed.")
@@ -155,17 +138,24 @@ def seed_mf_data(session: Session):
 
         bind = session.get_bind()
         if bind is not None and bind.dialect.name == "postgresql":
-            stmt = pg_insert(MutualFundDataModel).values(rows)
-            stmt = stmt.on_conflict_do_nothing(index_elements=["scheme_code"])
-            session.execute(stmt)
+            inserted_rows = 0
+            for i in range(0, len(rows), MF_BULK_INSERT_CHUNK_SIZE):
+                chunk = rows[i : i + MF_BULK_INSERT_CHUNK_SIZE]
+                stmt = pg_insert(MutualFundDataModel).values(chunk)
+                stmt = stmt.on_conflict_do_nothing(index_elements=["scheme_code"])
+                session.execute(stmt)
+                inserted_rows += len(chunk)
+            print(f"Inserted MF rows in chunks ({inserted_rows} attempted).")
         else:
             existing_codes = set(session.exec(select(MutualFundDataModel.scheme_code)).all())
             new_rows = [row for row in rows if row["scheme_code"] not in existing_codes]
             if new_rows:
-                session.bulk_insert_mappings(MutualFundDataModel, new_rows)
+                for i in range(0, len(new_rows), MF_BULK_INSERT_CHUNK_SIZE):
+                    chunk = new_rows[i : i + MF_BULK_INSERT_CHUNK_SIZE]
+                    session.bulk_insert_mappings(MutualFundDataModel, chunk)
 
         session.commit()
-        print(f"Successfully seeded MF data ({len(rows)} rows processed).")
+        print(f"Successfully seeded MF data from NAVAll ({len(rows)} rows processed, failed_rows={failed_rows}).")
     except Exception as e:
         print(f"Error fetching MF data: {e}")
         session.rollback()

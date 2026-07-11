@@ -187,6 +187,13 @@ class GoalCreate(BaseModel):
     target_date: Optional[datetime] = None
 
 
+class GoalUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    target_amount: Optional[Decimal] = None
+    current_amount: Optional[Decimal] = None
+    target_date: Optional[datetime] = None
+
+
 class GoalResponse(BaseModel):
     id: UUID
     user_id: UUID

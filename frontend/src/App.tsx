@@ -23,15 +23,22 @@ import { api, ApiError } from "./api";
 import type {
   Account,
   AccountType,
-  Category,
   CategoryGroups,
   CategoryKind,
+  CreateMutualFundInvestmentPayload,
+  CreateInternationalInvestmentPayload,
+  CreateStockInvestmentPayload,
   CreateAccountPayload,
   CreateBudgetPayload,
   CreateGoalPayload,
   CreateTransactionPayload,
   Budget,
   Goal,
+  MutualFundPortfolio,
+  MutualFundSearchItem,
+  StockPortfolio,
+  InternationalPortfolio,
+  InvestmentOptionsCatalog,
   TokenResponse,
   Transaction,
   TransactionType,
@@ -62,6 +69,27 @@ const blankForm = {
 
 function formatCurrency(value: number) {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" }).format(value);
+}
+
+function formatSignedCurrency(value: number) {
+  if (value > 0) {
+    return `+${formatCurrency(value)}`;
+  }
+  if (value < 0) {
+    return `-${formatCurrency(Math.abs(value))}`;
+  }
+  return formatCurrency(value);
+}
+
+function formatOptionalDate(value: string | null) {
+  if (!value) {
+    return "N/A";
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toLocaleDateString();
 }
 
 function parseAmount(value: string) {
@@ -356,6 +384,7 @@ function DashboardShell({
   const [savingAccount, setSavingAccount] = useState(false);
   const [savingDefaultBalances, setSavingDefaultBalances] = useState(false);
   const [savingGoal, setSavingGoal] = useState(false);
+  const [savingGoalEdit, setSavingGoalEdit] = useState(false);
   const [savingBudget, setSavingBudget] = useState(false);
   const [savingTransaction, setSavingTransaction] = useState(false);
   const [showTransactionComposer, setShowTransactionComposer] = useState(false);
@@ -363,6 +392,49 @@ function DashboardShell({
   const [defaultBalanceDraft, setDefaultBalanceDraft] = useState("");
   const [sidebarHovered, setSidebarHovered] = useState(false);
   const [activeInvestmentTab, setActiveInvestmentTab] = useState<(typeof investmentTabNames)[number]>(investmentTabNames[0]);
+  const [mutualFundSearchQuery, setMutualFundSearchQuery] = useState("");
+  const [mutualFundSearchResults, setMutualFundSearchResults] = useState<MutualFundSearchItem[]>([]);
+  const [selectedMutualFund, setSelectedMutualFund] = useState<MutualFundSearchItem | null>(null);
+  const [mutualFundPortfolio, setMutualFundPortfolio] = useState<MutualFundPortfolio | null>(null);
+  const [stockPortfolio, setStockPortfolio] = useState<StockPortfolio | null>(null);
+  const [internationalPortfolio, setInternationalPortfolio] = useState<InternationalPortfolio | null>(null);
+  const [investmentOptions, setInvestmentOptions] = useState<InvestmentOptionsCatalog>({
+    stock_sectors: [],
+    international_sectors: [],
+    mutual_fund_categories: []
+  });
+  const [loadingMutualFundSearch, setLoadingMutualFundSearch] = useState(false);
+  const [savingMutualFundInvestment, setSavingMutualFundInvestment] = useState(false);
+  const [savingStockInvestment, setSavingStockInvestment] = useState(false);
+  const [savingInternationalInvestment, setSavingInternationalInvestment] = useState(false);
+  const [loadingStockPrice, setLoadingStockPrice] = useState(false);
+  const [loadingInternationalPrice, setLoadingInternationalPrice] = useState(false);
+  const [mutualFundForm, setMutualFundForm] = useState({
+    goalId: "",
+    categoryOptionId: "",
+    units: "",
+    avgPrice: ""
+  });
+  const [stockForm, setStockForm] = useState({
+    symbol: "",
+    companyName: "",
+    exchange: "",
+    goalId: "",
+    sectorOptionId: "",
+    quantity: "",
+    avgPrice: "",
+    currentPrice: ""
+  });
+  const [internationalForm, setInternationalForm] = useState({
+    symbol: "",
+    securityName: "",
+    instrumentType: "stock" as "stock" | "index",
+    goalId: "",
+    sectorOptionId: "",
+    quantity: "",
+    avgPrice: "",
+    currentPrice: ""
+  });
   const [editingTransactionId, setEditingTransactionId] = useState<number | null>(null);
   const [savingTransactionEdit, setSavingTransactionEdit] = useState(false);
   const [accountForm, setAccountForm] = useState({
@@ -394,6 +466,11 @@ function DashboardShell({
     targetAmount: "",
     currentAmount: "0.00",
     targetDate: ""
+  });
+  const [editingGoalId, setEditingGoalId] = useState<string | null>(null);
+  const [goalEditForm, setGoalEditForm] = useState({
+    targetAmount: "",
+    currentAmount: ""
   });
   const [budgetForm, setBudgetForm] = useState({
     name: "",
@@ -490,12 +567,17 @@ function DashboardShell({
       setLoadingWorkspace(true);
     }
     setWorkspaceError(null);
-    const [accountsResult, goalsResult, budgetsResult, transactionsResult, categoriesResult] = await Promise.allSettled([
+    const [accountsResult, goalsResult, budgetsResult, transactionsResult, categoriesResult, mutualFundsResult, stocksResult, internationalResult, investmentOptionsResult] =
+      await Promise.allSettled([
       api.listAccounts(token),
       api.listGoals(token),
       api.listBudgets(token),
       api.listTransactions(token),
-      api.listCategories(token)
+      api.listCategories(token),
+      api.listMutualFundPortfolio(token),
+      api.listStockPortfolio(token),
+      api.listInternationalPortfolio(token),
+      api.listInvestmentOptions(token)
     ]);
 
     if (accountsResult.status === "fulfilled") {
@@ -513,10 +595,30 @@ function DashboardShell({
     if (categoriesResult.status === "fulfilled") {
       setCategoriesByKind(categoriesResult.value);
     }
+    if (mutualFundsResult.status === "fulfilled") {
+      setMutualFundPortfolio(mutualFundsResult.value);
+    }
+    if (stocksResult.status === "fulfilled") {
+      setStockPortfolio(stocksResult.value);
+    }
+    if (internationalResult.status === "fulfilled") {
+      setInternationalPortfolio(internationalResult.value);
+    }
+    if (investmentOptionsResult.status === "fulfilled") {
+      setInvestmentOptions(investmentOptionsResult.value);
+    }
 
-    const failed = [accountsResult, goalsResult, budgetsResult, transactionsResult, categoriesResult].filter(
-      (result) => result.status === "rejected"
-    );
+    const failed = [
+      accountsResult,
+      goalsResult,
+      budgetsResult,
+      transactionsResult,
+      categoriesResult,
+      mutualFundsResult,
+      stocksResult,
+      internationalResult,
+      investmentOptionsResult
+    ].filter((result) => result.status === "rejected");
     if (failed.length > 0) {
       setWorkspaceMessage(null);
       setWorkspaceError("Some data could not be refreshed. Please try again.");
@@ -654,23 +756,177 @@ function DashboardShell({
     }
   }
 
-  async function submitDefaultOpeningBalances(event: FormEvent<HTMLFormElement>) {
+  async function searchMutualFunds(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setSavingDefaultBalances(true);
+    const query = mutualFundSearchQuery.trim();
+    if (!query) {
+      setMutualFundSearchResults([]);
+      return;
+    }
+
+    setLoadingMutualFundSearch(true);
+    setWorkspaceError(null);
+    try {
+      const results = await api.searchMutualFunds(token, query);
+      setMutualFundSearchResults(results);
+    } catch (caught) {
+      setWorkspaceError(caught instanceof ApiError ? caught.message : "Unable to search mutual funds.");
+    } finally {
+      setLoadingMutualFundSearch(false);
+    }
+  }
+
+  function chooseMutualFund(result: MutualFundSearchItem) {
+    setSelectedMutualFund(result);
+    setMutualFundSearchQuery(result.scheme_name);
+    setMutualFundSearchResults([]);
+  }
+
+  async function submitMutualFundInvestment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedMutualFund) {
+      setWorkspaceError("Please search and select a mutual fund first.");
+      return;
+    }
+    setSavingMutualFundInvestment(true);
     setWorkspaceError(null);
     setWorkspaceMessage(null);
 
+    const payload: CreateMutualFundInvestmentPayload = {
+      scheme_code: selectedMutualFund.scheme_code,
+      goal_id: mutualFundForm.goalId || null,
+      category_option_id: mutualFundForm.categoryOptionId || null,
+      units: mutualFundForm.units,
+      avg_price: mutualFundForm.avgPrice
+    };
+
     try {
-      await api.setupDefaultOpeningBalances(token, {
-        cash_opening_balance: defaultBalancesForm.cashOpeningBalance || "0.00",
-        pending_from_friends_opening_balance: defaultBalancesForm.pendingFromFriendsOpeningBalance || "0.00"
-      });
-      setWorkspaceMessage("Default account opening balances updated.");
+      await api.createMutualFundInvestment(token, payload);
+      setWorkspaceMessage("Mutual fund investment saved.");
+      setMutualFundForm({ goalId: "", categoryOptionId: "", units: "", avgPrice: "" });
+      setSelectedMutualFund(null);
+      setMutualFundSearchQuery("");
+      setMutualFundSearchResults([]);
       await loadWorkspace({ showLoader: false });
     } catch (caught) {
-      setWorkspaceError(caught instanceof ApiError ? caught.message : "Unable to update default opening balances.");
+      setWorkspaceError(caught instanceof ApiError ? caught.message : "Unable to save mutual fund investment.");
     } finally {
-      setSavingDefaultBalances(false);
+      setSavingMutualFundInvestment(false);
+    }
+  }
+
+  async function submitStockInvestment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSavingStockInvestment(true);
+    setWorkspaceError(null);
+    setWorkspaceMessage(null);
+
+    const payload: CreateStockInvestmentPayload = {
+      symbol: stockForm.symbol,
+      company_name: stockForm.companyName || null,
+      exchange: stockForm.exchange || null,
+      goal_id: stockForm.goalId || null,
+      sector_option_id: stockForm.sectorOptionId || null,
+      quantity: stockForm.quantity,
+      avg_price: stockForm.avgPrice,
+      current_price: stockForm.currentPrice || undefined
+    };
+
+    try {
+      await api.createStockInvestment(token, payload);
+      setWorkspaceMessage("Stock investment saved.");
+      setStockForm({
+        symbol: "",
+        companyName: "",
+        exchange: "",
+        goalId: "",
+        sectorOptionId: "",
+        quantity: "",
+        avgPrice: "",
+        currentPrice: ""
+      });
+      await loadWorkspace({ showLoader: false });
+    } catch (caught) {
+      setWorkspaceError(caught instanceof ApiError ? caught.message : "Unable to save stock investment.");
+    } finally {
+      setSavingStockInvestment(false);
+    }
+  }
+
+  async function fetchStockCurrentPrice() {
+    const symbol = stockForm.symbol.trim();
+    if (!symbol) {
+      setWorkspaceError("Enter stock symbol first.");
+      return;
+    }
+    setLoadingStockPrice(true);
+    setWorkspaceError(null);
+    try {
+      const result = await api.fetchStockCurrentPrice(token, symbol, stockForm.exchange || undefined);
+      setStockForm((current) => ({ ...current, currentPrice: result.current_price }));
+      setWorkspaceMessage(`Fetched current price for ${result.market_symbol}.`);
+    } catch (caught) {
+      setWorkspaceError(caught instanceof ApiError ? caught.message : "Unable to fetch stock current price.");
+    } finally {
+      setLoadingStockPrice(false);
+    }
+  }
+
+  async function fetchInternationalCurrentPrice() {
+    const symbol = internationalForm.symbol.trim();
+    if (!symbol) {
+      setWorkspaceError("Enter international symbol first.");
+      return;
+    }
+    setLoadingInternationalPrice(true);
+    setWorkspaceError(null);
+    try {
+      const result = await api.fetchInternationalCurrentPrice(token, symbol);
+      setInternationalForm((current) => ({ ...current, currentPrice: result.current_price }));
+      setWorkspaceMessage(`Fetched current price for ${result.market_symbol}.`);
+    } catch (caught) {
+      setWorkspaceError(caught instanceof ApiError ? caught.message : "Unable to fetch international current price.");
+    } finally {
+      setLoadingInternationalPrice(false);
+    }
+  }
+
+  async function submitInternationalInvestment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSavingInternationalInvestment(true);
+    setWorkspaceError(null);
+    setWorkspaceMessage(null);
+
+    const payload: CreateInternationalInvestmentPayload = {
+      symbol: internationalForm.symbol,
+      security_name: internationalForm.securityName || null,
+      market: "US",
+      instrument_type: internationalForm.instrumentType,
+      goal_id: internationalForm.goalId || null,
+      sector_option_id: internationalForm.sectorOptionId || null,
+      quantity: internationalForm.quantity,
+      avg_price: internationalForm.avgPrice,
+      current_price: internationalForm.currentPrice || undefined
+    };
+
+    try {
+      await api.createInternationalInvestment(token, payload);
+      setWorkspaceMessage("International investment saved.");
+      setInternationalForm({
+        symbol: "",
+        securityName: "",
+        instrumentType: "stock",
+        goalId: "",
+        sectorOptionId: "",
+        quantity: "",
+        avgPrice: "",
+        currentPrice: ""
+      });
+      await loadWorkspace({ showLoader: false });
+    } catch (caught) {
+      setWorkspaceError(caught instanceof ApiError ? caught.message : "Unable to save international investment.");
+    } finally {
+      setSavingInternationalInvestment(false);
     }
   }
 
@@ -739,6 +995,40 @@ function DashboardShell({
       setWorkspaceError(caught instanceof ApiError ? caught.message : "Unable to save goal.");
     } finally {
       setSavingGoal(false);
+    }
+  }
+
+  function startEditGoal(goal: Goal) {
+    setEditingGoalId(goal.id);
+    setGoalEditForm({
+      targetAmount: goal.target_amount,
+      currentAmount: goal.current_amount
+    });
+    setWorkspaceError(null);
+    setWorkspaceMessage(null);
+  }
+
+  async function submitGoalEdit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editingGoalId) {
+      return;
+    }
+    setSavingGoalEdit(true);
+    setWorkspaceError(null);
+    setWorkspaceMessage(null);
+
+    try {
+      await api.updateGoal(token, editingGoalId, {
+        target_amount: goalEditForm.targetAmount,
+        current_amount: goalEditForm.currentAmount
+      });
+      setWorkspaceMessage("Goal amounts updated.");
+      setEditingGoalId(null);
+      await loadWorkspace({ showLoader: false });
+    } catch (caught) {
+      setWorkspaceError(caught instanceof ApiError ? caught.message : "Unable to update goal.");
+    } finally {
+      setSavingGoalEdit(false);
     }
   }
 
@@ -1321,14 +1611,67 @@ function DashboardShell({
             goals.map((goal) => {
               const target = parseAmount(goal.target_amount);
               const current = parseAmount(goal.current_amount);
-              const progress = target > 0 ? Math.min(100, Math.round((current / target) * 100)) : 0;
+              const progress = target > 0 ? Math.min(100, (current / target) * 100) : 0;
+              const needed = Math.max(target - current, 0);
               return (
-                <article key={goal.id} className="data-row">
-                  <div>
-                    <strong>{goal.name}</strong>
-                    <p>
-                      {formatCurrency(current)} / {formatCurrency(target)} - {progress}% complete
-                    </p>
+                <article key={goal.id} className="data-row goal-row">
+                  <div className="goal-row-main">
+                    <div>
+                      <strong>{goal.name}</strong>
+                      <p>
+                        Current {formatCurrency(current)} | Needed {formatCurrency(needed)} | Target {formatCurrency(target)}
+                      </p>
+                    </div>
+                    <div className="goal-progress-block" role="progressbar" aria-valuenow={Math.round(progress)} aria-valuemin={0} aria-valuemax={100}>
+                      <div className="goal-progress-track">
+                        <div className="goal-progress-fill" style={{ width: `${progress}%` }} />
+                      </div>
+                      <span>{progress.toFixed(1)}%</span>
+                    </div>
+                    {editingGoalId === goal.id ? (
+                      <form className="workspace-form goal-edit-form" onSubmit={submitGoalEdit}>
+                        <label>
+                          Target amount
+                          <input
+                            required
+                            min="0.01"
+                            step="0.01"
+                            type="number"
+                            value={goalEditForm.targetAmount}
+                            onChange={(event) => setGoalEditForm({ ...goalEditForm, targetAmount: event.target.value })}
+                          />
+                        </label>
+                        <label>
+                          Current amount
+                          <input
+                            required
+                            min="0"
+                            step="0.01"
+                            type="number"
+                            value={goalEditForm.currentAmount}
+                            onChange={(event) => setGoalEditForm({ ...goalEditForm, currentAmount: event.target.value })}
+                          />
+                        </label>
+                        <div className="inline-actions">
+                          <button className="primary-action compact-primary-action" type="submit" disabled={savingGoalEdit}>
+                            {savingGoalEdit && <Loader2 className="spin" size={16} />}
+                            {savingGoalEdit ? "Saving" : "Save amount"}
+                          </button>
+                          <button
+                            className="subtle-action small-action"
+                            type="button"
+                            disabled={savingGoalEdit}
+                            onClick={() => setEditingGoalId(null)}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </form>
+                    ) : (
+                      <button className="subtle-action small-action" type="button" onClick={() => startEditGoal(goal)}>
+                        Edit Amount
+                      </button>
+                    )}
                   </div>
                   <span>{goal.target_date ? new Date(goal.target_date).toLocaleDateString() : "No target date"}</span>
                 </article>
@@ -1442,42 +1785,564 @@ function DashboardShell({
   }
 
   function renderInvestmentSection() {
+    const isMutualFundsTab = activeInvestmentTab === "Mutual Funds";
+    const isStocksTab = activeInvestmentTab === "Stocks";
+    const isInternationalTab = activeInvestmentTab === "International Investment";
+
+    if (!isMutualFundsTab && !isStocksTab && !isInternationalTab) {
+      return (
+        <section className="workspace-panel">
+          <div>
+            <p className="eyebrow">Investment</p>
+            <h2>Track investment categories</h2>
+          </div>
+          <div className="section-pills" aria-label="Investment categories">
+            {investmentTabNames.map((tabName) => (
+              <button key={tabName} className={activeInvestmentTab === tabName ? "active" : ""} type="button" onClick={() => setActiveInvestmentTab(tabName)}>
+                {tabName}
+              </button>
+            ))}
+          </div>
+          <div className="data-list">
+            {investmentTransactions.length === 0 ? (
+              <p>No transactions for {activeInvestmentTab} yet.</p>
+            ) : (
+              investmentTransactions.slice(0, 10).map((transaction) => (
+                <article key={transaction.id} className="data-row">
+                  <div>
+                    <strong>{transaction.merchant || activeInvestmentTab}</strong>
+                    <p>{new Date(transaction.date).toLocaleString()}</p>
+                  </div>
+                  <span className={transactionAmountClass(transaction.transaction_type)}>
+                    {transactionAmountPrefix(transaction.transaction_type)}
+                    {formatCurrency(parseAmount(transaction.amount))}
+                  </span>
+                </article>
+              ))
+            )}
+          </div>
+        </section>
+      );
+    }
+
+    const activePortfolio = isMutualFundsTab
+      ? mutualFundPortfolio
+      : isStocksTab
+        ? stockPortfolio
+        : internationalPortfolio;
+    const totalInvested = parseAmount(activePortfolio?.total_invested_amount ?? "0");
+    const totalCurrent = parseAmount(activePortfolio?.total_current_value ?? "0");
+    const totalPnl = parseAmount(activePortfolio?.total_pnl ?? "0");
+    const totalPnlPercent = parseAmount(activePortfolio?.total_pnl_percent ?? "0");
+
     return (
       <section className="workspace-panel">
         <div>
           <p className="eyebrow">Investment</p>
-          <h2>Track investment categories</h2>
+          <h2>{isMutualFundsTab ? "Mutual fund portfolio" : isStocksTab ? "Stock portfolio" : "International portfolio"}</h2>
         </div>
         <div className="section-pills" aria-label="Investment categories">
           {investmentTabNames.map((tabName) => (
-            <button
-              key={tabName}
-              className={activeInvestmentTab === tabName ? "active" : ""}
-              type="button"
-              onClick={() => setActiveInvestmentTab(tabName)}
-            >
+            <button key={tabName} className={activeInvestmentTab === tabName ? "active" : ""} type="button" onClick={() => setActiveInvestmentTab(tabName)}>
               {tabName}
             </button>
           ))}
         </div>
-        <div className="data-list">
-          {investmentTransactions.length === 0 ? (
-            <p>No transactions for {activeInvestmentTab} yet.</p>
-          ) : (
-            investmentTransactions.slice(0, 10).map((transaction) => (
-              <article key={transaction.id} className="data-row">
-                <div>
-                  <strong>{transaction.merchant || activeInvestmentTab}</strong>
-                  <p>{new Date(transaction.date).toLocaleString()}</p>
-                </div>
-                <span className={transactionAmountClass(transaction.transaction_type)}>
-                  {transactionAmountPrefix(transaction.transaction_type)}
-                  {formatCurrency(parseAmount(transaction.amount))}
-                </span>
+
+        {isMutualFundsTab && (
+          <>
+            <div className="investment-layout">
+              <form className="workspace-form investment-form" onSubmit={searchMutualFunds}>
+                <label>
+                  Search mutual fund
+                  <input
+                    placeholder="Try: axis, hdfc, nifty"
+                    value={mutualFundSearchQuery}
+                    onChange={(event) => setMutualFundSearchQuery(event.target.value)}
+                  />
+                </label>
+                <button className="subtle-action mf-search-button" type="submit" disabled={loadingMutualFundSearch}>
+                  {loadingMutualFundSearch && <Loader2 className="spin" size={16} />}
+                  {loadingMutualFundSearch ? "Searching" : "Search"}
+                </button>
+              </form>
+
+              <div className="data-list investment-search-results">
+                {mutualFundSearchResults.length === 0 ? (
+                  <p>No search results yet.</p>
+                ) : (
+                  mutualFundSearchResults.slice(0, 8).map((result) => (
+                    <article key={result.scheme_code} className="data-row compact-selection-row">
+                      <div>
+                        <strong>{result.scheme_name}</strong>
+                        <p>
+                          Code: {result.scheme_code}
+                          {result.fund_house ? ` | ${result.fund_house}` : ""}
+                        </p>
+                        <p>
+                          Latest NAV: {result.nav !== null ? formatCurrency(parseAmount(result.nav)) : "N/A"}
+                          {" | "}
+                          Date: {formatOptionalDate(result.date)}
+                        </p>
+                      </div>
+                      <button className="subtle-action small-action" type="button" onClick={() => chooseMutualFund(result)}>
+                        Select
+                      </button>
+                    </article>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <form className="workspace-form investment-form compact-investment-form" onSubmit={submitMutualFundInvestment}>
+              <div className="selected-mf-block">
+                <p className="eyebrow">Selected mutual fund</p>
+                {selectedMutualFund ? (
+                  <>
+                    <strong>{selectedMutualFund.scheme_name}</strong>
+                    <p>
+                      Code: {selectedMutualFund.scheme_code}
+                      {selectedMutualFund.fund_house ? ` | ${selectedMutualFund.fund_house}` : ""}
+                    </p>
+                    <p>
+                      Latest NAV: {selectedMutualFund.nav !== null ? formatCurrency(parseAmount(selectedMutualFund.nav)) : "N/A"}
+                      {" | "}
+                      Date: {formatOptionalDate(selectedMutualFund.date)}
+                    </p>
+                  </>
+                ) : (
+                  <p>Select a mutual fund from the search results above.</p>
+                )}
+              </div>
+              <label>
+                Goal tag
+                <select value={mutualFundForm.goalId} onChange={(event) => setMutualFundForm({ ...mutualFundForm, goalId: event.target.value })}>
+                  <option value="">No goal</option>
+                  {goals.map((goal) => (
+                    <option key={goal.id} value={goal.id}>
+                      {goal.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Category
+                <select
+                  value={mutualFundForm.categoryOptionId}
+                  onChange={(event) => setMutualFundForm({ ...mutualFundForm, categoryOptionId: event.target.value })}
+                >
+                  <option value="">No category</option>
+                  {investmentOptions.mutual_fund_categories.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.display_name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Units
+                <input
+                  required
+                  min="0.001"
+                  step="0.001"
+                  type="number"
+                  value={mutualFundForm.units}
+                  onChange={(event) => setMutualFundForm({ ...mutualFundForm, units: event.target.value })}
+                />
+              </label>
+              <label>
+                Avg buy price
+                <input
+                  required
+                  min="0.001"
+                  step="0.001"
+                  type="number"
+                  value={mutualFundForm.avgPrice}
+                  onChange={(event) => setMutualFundForm({ ...mutualFundForm, avgPrice: event.target.value })}
+                />
+              </label>
+              <button className="primary-action" disabled={savingMutualFundInvestment || !selectedMutualFund} type="submit">
+                {savingMutualFundInvestment && <Loader2 className="spin" size={16} />}
+                {savingMutualFundInvestment ? "Saving" : "Add investment"}
+              </button>
+            </form>
+
+            <section className="dashboard-grid investment-summary-grid" aria-label="Investment summary">
+              <article>
+                <p>Total invested</p>
+                <strong>{formatCurrency(totalInvested)}</strong>
               </article>
-            ))
-          )}
-        </div>
+              <article>
+                <p>Current value</p>
+                <strong>{formatCurrency(totalCurrent)}</strong>
+              </article>
+              <article>
+                <p>Total P/L</p>
+                <strong className={totalPnl >= 0 ? "amount-positive" : "amount-negative"}>
+                  {formatSignedCurrency(totalPnl)} ({totalPnlPercent.toFixed(2)}%)
+                </strong>
+              </article>
+            </section>
+
+            <div className="table-wrapper">
+              {!mutualFundPortfolio || mutualFundPortfolio.holdings.length === 0 ? (
+                <p>No mutual fund holdings yet.</p>
+              ) : (
+                <table className="portfolio-table">
+                  <thead>
+                    <tr>
+                      <th>Scheme Code</th>
+                      <th>Units</th>
+                      <th>Avg. NAV</th>
+                      <th>Catagory</th>
+                      <th>Scheme Name</th>
+                      <th>NAV</th>
+                      <th>NAV Date</th>
+                      <th>Invested</th>
+                      <th>Current</th>
+                      <th>Abs. P&amp;L</th>
+                      <th>Abs. P&amp;L %</th>
+                      <th>Goal</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {mutualFundPortfolio.holdings.map((holding) => {
+                      const pnlValue = parseAmount(holding.pnl);
+                      const pnlPercent = parseAmount(holding.pnl_percent);
+                      return (
+                        <tr key={holding.id}>
+                          <td>{holding.scheme_code}</td>
+                          <td>{holding.units}</td>
+                          <td>{holding.avg_price}</td>
+                          <td>{holding.category_name ?? "-"}</td>
+                          <td title={holding.scheme_name} className="table-text-ellipsis">{holding.scheme_name}</td>
+                          <td>{holding.nav ?? "-"}</td>
+                          <td>{formatOptionalDate(holding.nav_date)}</td>
+                          <td>{formatCurrency(parseAmount(holding.invested_amount))}</td>
+                          <td>{formatCurrency(parseAmount(holding.current_value))}</td>
+                          <td className={pnlValue >= 0 ? "amount-positive" : "amount-negative"}>{formatSignedCurrency(pnlValue)}</td>
+                          <td className={pnlPercent >= 0 ? "amount-positive" : "amount-negative"}>
+                            {pnlPercent >= 0 ? "+" : ""}
+                            {pnlPercent.toFixed(2)}%
+                          </td>
+                          <td>{holding.goal_name ?? "-"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </>
+        )}
+
+        {isStocksTab && (
+          <>
+            <form className="workspace-form investment-form compact-investment-form" onSubmit={submitStockInvestment}>
+              <label>
+                Symbol
+                <input required value={stockForm.symbol} onChange={(event) => setStockForm({ ...stockForm, symbol: event.target.value })} />
+              </label>
+              <label>
+                Company name
+                <input value={stockForm.companyName} onChange={(event) => setStockForm({ ...stockForm, companyName: event.target.value })} />
+              </label>
+              <label>
+                Exchange
+                <input placeholder="NSE, BSE" value={stockForm.exchange} onChange={(event) => setStockForm({ ...stockForm, exchange: event.target.value })} />
+              </label>
+              <label>
+                Goal tag
+                <select value={stockForm.goalId} onChange={(event) => setStockForm({ ...stockForm, goalId: event.target.value })}>
+                  <option value="">No goal</option>
+                  {goals.map((goal) => (
+                    <option key={goal.id} value={goal.id}>
+                      {goal.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Sector
+                <select
+                  value={stockForm.sectorOptionId}
+                  onChange={(event) => setStockForm({ ...stockForm, sectorOptionId: event.target.value })}
+                >
+                  <option value="">No sector</option>
+                  {investmentOptions.stock_sectors.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.display_name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Quantity
+                <input required min="0.001" step="0.001" type="number" value={stockForm.quantity} onChange={(event) => setStockForm({ ...stockForm, quantity: event.target.value })} />
+              </label>
+              <label>
+                Avg buy price
+                <input required min="0.001" step="0.001" type="number" value={stockForm.avgPrice} onChange={(event) => setStockForm({ ...stockForm, avgPrice: event.target.value })} />
+              </label>
+              <label>
+                Current price
+                <div className="inline-actions">
+                  <input
+                    required
+                    min="0.001"
+                    step="0.001"
+                    type="number"
+                    value={stockForm.currentPrice}
+                    onChange={(event) => setStockForm({ ...stockForm, currentPrice: event.target.value })}
+                  />
+                  <button className="subtle-action small-action" type="button" disabled={loadingStockPrice} onClick={() => void fetchStockCurrentPrice()}>
+                    {loadingStockPrice && <Loader2 className="spin" size={14} />}
+                    {loadingStockPrice ? "Fetching" : "Auto"}
+                  </button>
+                </div>
+              </label>
+              <button className="primary-action" disabled={savingStockInvestment} type="submit">
+                {savingStockInvestment && <Loader2 className="spin" size={16} />}
+                {savingStockInvestment ? "Saving" : "Add stock"}
+              </button>
+            </form>
+            <section className="dashboard-grid investment-summary-grid" aria-label="Investment summary">
+              <article>
+                <p>Total invested</p>
+                <strong>{formatCurrency(totalInvested)}</strong>
+              </article>
+              <article>
+                <p>Current value</p>
+                <strong>{formatCurrency(totalCurrent)}</strong>
+              </article>
+              <article>
+                <p>Total P/L</p>
+                <strong className={totalPnl >= 0 ? "amount-positive" : "amount-negative"}>
+                  {formatSignedCurrency(totalPnl)} ({totalPnlPercent.toFixed(2)}%)
+                </strong>
+              </article>
+            </section>
+            <div className="table-wrapper">
+              {!stockPortfolio || stockPortfolio.holdings.length === 0 ? (
+                <p>No stock holdings yet.</p>
+              ) : (
+                <table className="portfolio-table">
+                  <thead>
+                    <tr>
+                      <th>Security Code</th>
+                      <th>Quantity</th>
+                      <th>Avg. Price</th>
+                      <th>Sector</th>
+                      <th>Name</th>
+                      <th>Current Price</th>
+                      <th>Invested</th>
+                      <th>Current</th>
+                      <th>Abs P&amp;L</th>
+                      <th>Abs.P&amp;L %</th>
+                      <th>Goal</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stockPortfolio.holdings.map((holding) => {
+                      const pnlValue = parseAmount(holding.pnl);
+                      const pnlPercent = parseAmount(holding.pnl_percent);
+                      return (
+                        <tr key={holding.id}>
+                          <td>{holding.symbol}</td>
+                          <td>{holding.quantity}</td>
+                          <td>{holding.avg_price}</td>
+                          <td>{holding.sector_name ?? "-"}</td>
+                          <td title={holding.company_name ?? "Stock"} className="table-text-ellipsis">
+                            {holding.company_name ?? "Stock"}
+                          </td>
+                          <td>{holding.current_price}</td>
+                          <td>{formatCurrency(parseAmount(holding.invested_amount))}</td>
+                          <td>{formatCurrency(parseAmount(holding.current_value))}</td>
+                          <td className={pnlValue >= 0 ? "amount-positive" : "amount-negative"}>{formatSignedCurrency(pnlValue)}</td>
+                          <td className={pnlPercent >= 0 ? "amount-positive" : "amount-negative"}>
+                            {pnlPercent >= 0 ? "+" : ""}
+                            {pnlPercent.toFixed(2)}%
+                          </td>
+                          <td>{holding.goal_name ?? "-"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </>
+        )}
+
+        {isInternationalTab && (
+          <>
+            <form className="workspace-form investment-form compact-investment-form" onSubmit={submitInternationalInvestment}>
+              <label>
+                Symbol
+                <input
+                  required
+                  placeholder="AAPL, MSFT, ^GSPC, ^NDX"
+                  value={internationalForm.symbol}
+                  onChange={(event) => setInternationalForm({ ...internationalForm, symbol: event.target.value })}
+                />
+              </label>
+              <label>
+                Security name
+                <input
+                  value={internationalForm.securityName}
+                  onChange={(event) => setInternationalForm({ ...internationalForm, securityName: event.target.value })}
+                />
+              </label>
+              <label>
+                Type
+                <select
+                  value={internationalForm.instrumentType}
+                  onChange={(event) =>
+                    setInternationalForm({ ...internationalForm, instrumentType: event.target.value as "stock" | "index" })
+                  }
+                >
+                  <option value="stock">US Stock</option>
+                  <option value="index">US Index</option>
+                </select>
+              </label>
+              <label>
+                Goal tag
+                <select value={internationalForm.goalId} onChange={(event) => setInternationalForm({ ...internationalForm, goalId: event.target.value })}>
+                  <option value="">No goal</option>
+                  {goals.map((goal) => (
+                    <option key={goal.id} value={goal.id}>
+                      {goal.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Sector
+                <select
+                  value={internationalForm.sectorOptionId}
+                  onChange={(event) => setInternationalForm({ ...internationalForm, sectorOptionId: event.target.value })}
+                >
+                  <option value="">No sector</option>
+                  {investmentOptions.international_sectors.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.display_name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Quantity
+                <input
+                  required
+                  min="0.001"
+                  step="0.001"
+                  type="number"
+                  value={internationalForm.quantity}
+                  onChange={(event) => setInternationalForm({ ...internationalForm, quantity: event.target.value })}
+                />
+              </label>
+              <label>
+                Avg buy price
+                <input
+                  required
+                  min="0.001"
+                  step="0.001"
+                  type="number"
+                  value={internationalForm.avgPrice}
+                  onChange={(event) => setInternationalForm({ ...internationalForm, avgPrice: event.target.value })}
+                />
+              </label>
+              <label>
+                Current price
+                <div className="inline-actions">
+                  <input
+                    required
+                    min="0.001"
+                    step="0.001"
+                    type="number"
+                    value={internationalForm.currentPrice}
+                    onChange={(event) => setInternationalForm({ ...internationalForm, currentPrice: event.target.value })}
+                  />
+                  <button className="subtle-action small-action" type="button" disabled={loadingInternationalPrice} onClick={() => void fetchInternationalCurrentPrice()}>
+                    {loadingInternationalPrice && <Loader2 className="spin" size={14} />}
+                    {loadingInternationalPrice ? "Fetching" : "Auto"}
+                  </button>
+                </div>
+              </label>
+              <button className="primary-action" disabled={savingInternationalInvestment} type="submit">
+                {savingInternationalInvestment && <Loader2 className="spin" size={16} />}
+                {savingInternationalInvestment ? "Saving" : "Add international"}
+              </button>
+            </form>
+
+            <section className="dashboard-grid investment-summary-grid" aria-label="Investment summary">
+              <article>
+                <p>Total invested</p>
+                <strong>{formatCurrency(totalInvested)}</strong>
+              </article>
+              <article>
+                <p>Current value</p>
+                <strong>{formatCurrency(totalCurrent)}</strong>
+              </article>
+              <article>
+                <p>Total P/L</p>
+                <strong className={totalPnl >= 0 ? "amount-positive" : "amount-negative"}>
+                  {formatSignedCurrency(totalPnl)} ({totalPnlPercent.toFixed(2)}%)
+                </strong>
+              </article>
+            </section>
+
+            <div className="table-wrapper">
+              {!internationalPortfolio || internationalPortfolio.holdings.length === 0 ? (
+                <p>No international holdings yet.</p>
+              ) : (
+                <table className="portfolio-table">
+                  <thead>
+                    <tr>
+                      <th>Security Code</th>
+                      <th>Quantity</th>
+                      <th>Avg. Price</th>
+                      <th>Sector</th>
+                      <th>Name</th>
+                      <th>Current Price</th>
+                      <th>Invested</th>
+                      <th>Current</th>
+                      <th>Abs P&amp;L</th>
+                      <th>Abs.P&amp;L %</th>
+                      <th>Goal</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {internationalPortfolio.holdings.map((holding) => {
+                      const pnlValue = parseAmount(holding.pnl);
+                      const pnlPercent = parseAmount(holding.pnl_percent);
+                      return (
+                        <tr key={holding.id}>
+                          <td>{holding.symbol}</td>
+                          <td>{holding.quantity}</td>
+                          <td>{holding.avg_price}</td>
+                          <td>{holding.sector_name ?? "-"}</td>
+                          <td title={holding.security_name ?? holding.symbol} className="table-text-ellipsis">
+                            {holding.security_name ?? holding.symbol}
+                          </td>
+                          <td>{holding.current_price}</td>
+                          <td>{formatCurrency(parseAmount(holding.invested_amount))}</td>
+                          <td>{formatCurrency(parseAmount(holding.current_value))}</td>
+                          <td className={pnlValue >= 0 ? "amount-positive" : "amount-negative"}>{formatSignedCurrency(pnlValue)}</td>
+                          <td className={pnlPercent >= 0 ? "amount-positive" : "amount-negative"}>
+                            {pnlPercent >= 0 ? "+" : ""}
+                            {pnlPercent.toFixed(2)}%
+                          </td>
+                          <td>{holding.goal_name ?? "-"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </>
+        )}
       </section>
     );
   }

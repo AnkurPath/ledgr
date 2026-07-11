@@ -3,7 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session
 
 from ledgr.core.db import engine
-from ledgr.features.users import router as users_router
+from ledgr.features.goals.router import router as goals_router
+from ledgr.features.users.router import router as users_router
+from ledgr.features.investments.router import router as investments_router
 from ledgr.features.transactions.router import router as transactions_router
 from ledgr.utils.globaldata import seed_all_globals
 
@@ -36,4 +38,8 @@ def health() -> dict[str, str]:
 app.include_router(users_router)
 
 app.include_router(transactions_router)
+
+app.include_router(investments_router)
+
+app.include_router(goals_router)
 

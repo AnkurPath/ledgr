@@ -3,20 +3,33 @@ import type {
   ApiStatus,
   CategoryGroups,
   Budget,
+  CurrentPrice,
   CreateAccountPayload,
   CreateBudgetPayload,
   CreateGoalPayload,
+  CreateInternationalInvestmentPayload,
+  UpdateGoalPayload,
+  CreateMutualFundInvestmentPayload,
+  CreateStockInvestmentPayload,
   CreateTransactionPayload,
   CreateTransactionResponse,
   SetupDefaultOpeningBalancesPayload,
   UpdateAccountPayload,
   UpdateTransactionPayload,
   Goal,
+  InvestmentOptionsCatalog,
   LoginPayload,
+  MutualFundInvestment,
+  MutualFundPortfolio,
+  MutualFundSearchItem,
   RegisterPayload,
   TokenResponse,
   Transaction,
-  UserProfile
+  UserProfile,
+  StockInvestment,
+  StockPortfolio,
+  InternationalInvestment,
+  InternationalPortfolio
 } from "./types";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? "";
@@ -106,9 +119,11 @@ export const api = {
   updateAccount: (token: string, accountId: number, body: UpdateAccountPayload) =>
     request<Account>(`/users/setup/accounts/${accountId}`, { method: "PATCH", token, body }),
   listCategories: (token: string) => request<CategoryGroups>("/users/setup/categories", { token }),
-  listGoals: (token: string) => request<Goal[]>("/users/setup/goals", { token }),
+  listGoals: (token: string) => request<Goal[]>("/goals", { token }),
   createGoal: (token: string, body: CreateGoalPayload) =>
-    request<Goal>("/users/setup/goals", { method: "POST", token, body }),
+    request<Goal>("/goals", { method: "POST", token, body }),
+  updateGoal: (token: string, goalId: string, body: UpdateGoalPayload) =>
+    request<Goal>(`/goals/${goalId}`, { method: "PATCH", token, body }),
   listBudgets: (token: string) => request<Budget[]>("/users/setup/budgets", { token }),
   createBudget: (token: string, body: CreateBudgetPayload) =>
     request<Budget>("/users/setup/budgets", { method: "POST", token, body }),
@@ -116,5 +131,27 @@ export const api = {
   createTransaction: (token: string, body: CreateTransactionPayload) =>
     request<CreateTransactionResponse>("/transactions", { method: "POST", token, body }),
   updateTransaction: (token: string, transactionId: number, body: UpdateTransactionPayload) =>
-    request<Transaction>(`/transactions/${transactionId}`, { method: "PATCH", token, body })
+    request<Transaction>(`/transactions/${transactionId}`, { method: "PATCH", token, body }),
+  searchMutualFunds: (token: string, query: string, limit = 20) =>
+    request<MutualFundSearchItem[]>(
+      `/investments/mutual-funds/search?q=${encodeURIComponent(query)}&limit=${encodeURIComponent(String(limit))}`,
+      { token }
+    ),
+  createMutualFundInvestment: (token: string, body: CreateMutualFundInvestmentPayload) =>
+    request<MutualFundInvestment>("/investments/mutual-funds", { method: "POST", token, body }),
+  listMutualFundPortfolio: (token: string) => request<MutualFundPortfolio>("/investments/mutual-funds", { token }),
+  createStockInvestment: (token: string, body: CreateStockInvestmentPayload) =>
+    request<StockInvestment>("/investments/stocks", { method: "POST", token, body }),
+  listStockPortfolio: (token: string) => request<StockPortfolio>("/investments/stocks", { token }),
+  fetchStockCurrentPrice: (token: string, symbol: string, exchange?: string) =>
+    request<CurrentPrice>(
+      `/investments/stocks/current-price?symbol=${encodeURIComponent(symbol)}${exchange ? `&exchange=${encodeURIComponent(exchange)}` : ""}`,
+      { token }
+    ),
+  createInternationalInvestment: (token: string, body: CreateInternationalInvestmentPayload) =>
+    request<InternationalInvestment>("/investments/international", { method: "POST", token, body }),
+  listInternationalPortfolio: (token: string) => request<InternationalPortfolio>("/investments/international", { token }),
+  fetchInternationalCurrentPrice: (token: string, symbol: string) =>
+    request<CurrentPrice>(`/investments/international/current-price?symbol=${encodeURIComponent(symbol)}`, { token }),
+  listInvestmentOptions: (token: string) => request<InvestmentOptionsCatalog>("/investments/options", { token })
 };

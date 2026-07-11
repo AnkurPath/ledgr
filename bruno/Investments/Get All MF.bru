@@ -5,9 +5,13 @@ meta {
 }
 
 get {
-  url: https://api.mfapi.in/mf
+  url: https://api.mfapi.in/mf/search
   body: none
   auth: inherit
+}
+
+params:query {
+  ~q: JM
 }
 
 settings {

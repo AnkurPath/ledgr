@@ -87,8 +87,8 @@ export type Category = {
 export type CategoryGroups = Record<CategoryKind, Category[]>;
 
 export type Goal = {
-  id: number;
-  user_id: number;
+  id: string;
+  user_id: string;
   name: string;
   target_amount: string;
   current_amount: string;
@@ -120,6 +120,8 @@ export type CreateGoalPayload = {
   current_amount?: string;
   target_date?: string | null;
 };
+
+export type UpdateGoalPayload = Partial<CreateGoalPayload>;
 
 export type CreateBudgetPayload = {
   name: string;
@@ -170,4 +172,187 @@ export type CreateTransactionResponse = {
   message: string;
   transactions: Transaction[];
   amount_transferred: string | null;
+};
+
+export type MutualFundSearchItem = {
+  scheme_code: number;
+  scheme_name: string;
+  fund_house: string | null;
+  nav: string | null;
+  date: string | null;
+};
+
+export type CreateMutualFundInvestmentPayload = {
+  scheme_code: number;
+  goal_id?: string | null;
+  category_option_id?: string | null;
+  units: string;
+  avg_price: string;
+};
+
+export type MutualFundInvestment = {
+  id: string;
+  user_id: string;
+  scheme_code: number;
+  goal_id: string | null;
+  category_option_id: string | null;
+  units: string;
+  avg_price: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MutualFundPortfolioHolding = {
+  id: string;
+  scheme_code: number;
+  goal_id: string | null;
+  goal_name: string | null;
+  category_option_id: string | null;
+  category_name: string | null;
+  scheme_name: string;
+  fund_house: string | null;
+  units: string;
+  avg_price: string;
+  nav: string | null;
+  nav_date: string | null;
+  invested_amount: string;
+  current_value: string;
+  pnl: string;
+  pnl_percent: string;
+};
+
+export type MutualFundPortfolio = {
+  holdings: MutualFundPortfolioHolding[];
+  total_invested_amount: string;
+  total_current_value: string;
+  total_pnl: string;
+  total_pnl_percent: string;
+};
+
+export type CreateStockInvestmentPayload = {
+  symbol: string;
+  company_name?: string | null;
+  exchange?: string | null;
+  goal_id?: string | null;
+  sector_option_id?: string | null;
+  quantity: string;
+  avg_price: string;
+  current_price?: string;
+};
+
+export type StockInvestment = {
+  id: string;
+  user_id: string;
+  goal_id: string | null;
+  sector_option_id: string | null;
+  symbol: string;
+  company_name: string | null;
+  exchange: string | null;
+  quantity: string;
+  avg_price: string;
+  current_price: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type StockPortfolioHolding = {
+  id: string;
+  symbol: string;
+  company_name: string | null;
+  exchange: string | null;
+  goal_id: string | null;
+  goal_name: string | null;
+  sector_option_id: string | null;
+  sector_name: string | null;
+  quantity: string;
+  avg_price: string;
+  current_price: string;
+  invested_amount: string;
+  current_value: string;
+  pnl: string;
+  pnl_percent: string;
+};
+
+export type StockPortfolio = {
+  holdings: StockPortfolioHolding[];
+  total_invested_amount: string;
+  total_current_value: string;
+  total_pnl: string;
+  total_pnl_percent: string;
+};
+
+export type CurrentPrice = {
+  symbol: string;
+  market_symbol: string;
+  current_price: string;
+};
+
+export type InvestmentOption = {
+  id: string;
+  asset_type: string;
+  field_name: string;
+  display_name: string;
+  sort_order: number;
+  is_active: boolean;
+};
+
+export type InvestmentOptionsCatalog = {
+  stock_sectors: InvestmentOption[];
+  international_sectors: InvestmentOption[];
+  mutual_fund_categories: InvestmentOption[];
+};
+
+export type CreateInternationalInvestmentPayload = {
+  symbol: string;
+  security_name?: string | null;
+  market?: string;
+  instrument_type?: "stock" | "index";
+  goal_id?: string | null;
+  sector_option_id?: string | null;
+  quantity: string;
+  avg_price: string;
+  current_price?: string;
+};
+
+export type InternationalInvestment = {
+  id: string;
+  user_id: string;
+  goal_id: string | null;
+  sector_option_id: string | null;
+  symbol: string;
+  security_name: string | null;
+  market: string;
+  instrument_type: "stock" | "index";
+  quantity: string;
+  avg_price: string;
+  current_price: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type InternationalPortfolioHolding = {
+  id: string;
+  symbol: string;
+  security_name: string | null;
+  market: string;
+  instrument_type: "stock" | "index";
+  goal_id: string | null;
+  goal_name: string | null;
+  sector_option_id: string | null;
+  sector_name: string | null;
+  quantity: string;
+  avg_price: string;
+  current_price: string;
+  invested_amount: string;
+  current_value: string;
+  pnl: string;
+  pnl_percent: string;
+};
+
+export type InternationalPortfolio = {
+  holdings: InternationalPortfolioHolding[];
+  total_invested_amount: string;
+  total_current_value: string;
+  total_pnl: string;
+  total_pnl_percent: string;
 };

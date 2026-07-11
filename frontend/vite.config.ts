@@ -9,7 +9,9 @@ export default defineConfig({
       "/health": "http://127.0.0.1:8000",
       "/expenses": "http://127.0.0.1:8000",
       "/users": "http://127.0.0.1:8000",
-      "/transactions": "http://127.0.0.1:8000"
+      "/transactions": "http://127.0.0.1:8000",
+      "/investments": "http://127.0.0.1:8000",
+      "/goals": "http://127.0.0.1:8000"
     }
   }
 });

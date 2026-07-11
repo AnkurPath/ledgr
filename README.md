@@ -43,6 +43,20 @@ uv run main.py
 uv run pytest
 ```
 
+## Nightly Mutual Fund NAV Refresh
+
+Refresh latest NAV values for all schemes:
+
+```sh
+uv run python scripts/refresh_mf_nav.py
+```
+
+Example cron (daily at 1:30 AM):
+
+```sh
+30 1 * * * cd /path/to/ledgr && /usr/bin/env uv run python scripts/refresh_mf_nav.py >> /var/log/ledgr-mf-nav.log 2>&1
+```
+
 ## Code Organization
 
 The backend is organized by feature so finance domains can grow independently:
@@ -112,6 +126,9 @@ postgresql+psycopg://postgres:postgres@localhost:5433/ledgr
 - `PATCH /expenses/{expense_id}`
 - `DELETE /expenses/{expense_id}`
 - `GET /expenses/summary/daily`
+- `GET /investments/mutual-funds/search`
+- `POST /investments/mutual-funds`
+- `GET /investments/mutual-funds`
 
 Example request:
 

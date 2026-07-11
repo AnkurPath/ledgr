@@ -3,6 +3,7 @@ import os
 
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
+from dotenv import load_dotenv
 
 from alembic import context
 
@@ -14,7 +15,11 @@ from ledgr.models import (UserModel,
                           GoalModel, 
                           BudgetModel,
                           TransactionModel,
+                          InvestmentOptionModel,
                           MutualFundDataModel,
+                          MutualFundInvestmentModel,
+                          StockInvestmentModel,
+                          InternationalInvestmentModel,
                           NetWorthModel
                           )
 
@@ -22,9 +27,11 @@ from ledgr.models import (UserModel,
 # access to the values within the .ini file in use.
 config = context.config
 
+load_dotenv()
+
 # Prefer runtime env configuration (e.g. docker-compose service URL)
 # over static alembic.ini defaults.
-database_url = os.getenv("LEDGR_DATABASE_URL")
+database_url = os.getenv("LEDGR_DATABASE_URL", "postgresql+psycopg://postgres:postgres@localhost:5433/ledgr")
 if database_url:
     config.set_main_option("sqlalchemy.url", database_url)
 
