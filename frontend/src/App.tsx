@@ -6,7 +6,6 @@ import {
   BarChart3,
   Bell,
   CheckCircle2,
-  ChevronDown,
   Loader2,
   LockKeyhole,
   LogIn,
@@ -23,7 +22,7 @@ import {
   WalletCards,
   X
 } from "lucide-react";
-import { api, ApiError } from "./api";
+import { api, ApiError, accessTokenStorageKey, clearStoredTokens, persistTokens, refreshTokenStorageKey, tokensRefreshedEvent } from "./api";
 import type {
   Account,
   AccountType,
@@ -63,7 +62,14 @@ const ANALYSIS_TAG_COLORS: Record<AnalysisTagName, string> = {
   Wants: "#e8a87c",
   Investments: "#3d7ea6"
 };
+const INVESTMENT_ALLOCATION_COLORS = {
+  indianEquity: "#4f46e5",
+  gold: "#d4a017",
+  international: "#0ea5e9",
+  others: "#94a3b8"
+} as const;
 const investmentTabNames = [
+  "Overview",
   "Mutual Funds",
   "Stocks",
   "International Investment",
@@ -72,8 +78,6 @@ const investmentTabNames = [
   "Crypto",
   "Provident Fund"
 ] as const;
-
-const tokenStorageKey = "ledgr_access_token";
 
 const blankForm = {
   email: "",
@@ -97,6 +101,26 @@ function formatSignedCurrency(value: number) {
   return formatCurrency(value);
 }
 
+function formatUsdCurrency(value: number) {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
+}
+
+function formatSignedUsdCurrency(value: number) {
+  if (value > 0) {
+    return `+${formatUsdCurrency(value)}`;
+  }
+  if (value < 0) {
+    return `-${formatUsdCurrency(Math.abs(value))}`;
+  }
+  return formatUsdCurrency(value);
+}
+
+function formatClockLabel(value = new Date()) {
+  const date = value.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+  const time = value.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return `${date} · ${time}`;
+}
+
 function formatOptionalDate(value: string | null) {
   if (!value) {
     return "N/A";
@@ -111,6 +135,31 @@ function formatOptionalDate(value: string | null) {
 function parseAmount(value: string) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function pnlTone(value: number): "gain" | "loss" | "flat" {
+  if (value > 0) {
+    return "gain";
+  }
+  if (value < 0) {
+    return "loss";
+  }
+  return "flat";
+}
+
+function pnlAmountClass(tone: "gain" | "loss" | "flat") {
+  if (tone === "gain") {
+    return "amount-positive";
+  }
+  if (tone === "loss") {
+    return "amount-negative";
+  }
+  return "amount-neutral";
+}
+
+function formatPnlPercent(value: number) {
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value.toFixed(2)}%`;
 }
 
 function toDateInputValue(value = new Date()) {
@@ -303,7 +352,7 @@ function App() {
   const [publicView, setPublicView] = useState<PublicView>(() => readPublicViewFromHash());
   const [mode, setMode] = useState<AuthMode>(() => readAuthModeFromHash());
   const [form, setForm] = useState(blankForm);
-  const [token, setToken] = useState<string | null>(() => localStorage.getItem(tokenStorageKey));
+  const [token, setToken] = useState<string | null>(() => localStorage.getItem(accessTokenStorageKey));
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [apiStatus, setApiStatus] = useState<"checking" | "ok" | "offline">("checking");
   const [saving, setSaving] = useState(false);
@@ -324,8 +373,19 @@ function App() {
   }, []);
 
   useEffect(() => {
+    function onTokensRefreshed(event: Event) {
+      const nextToken = (event as CustomEvent<string>).detail;
+      if (typeof nextToken === "string" && nextToken) {
+        setToken(nextToken);
+      }
+    }
+    window.addEventListener(tokensRefreshedEvent, onTokensRefreshed);
+    return () => window.removeEventListener(tokensRefreshedEvent, onTokensRefreshed);
+  }, []);
+
+  useEffect(() => {
     function syncFromHash() {
-      if (localStorage.getItem(tokenStorageKey)) {
+      if (localStorage.getItem(accessTokenStorageKey)) {
         return;
       }
       setPublicView(readPublicViewFromHash());
@@ -347,7 +407,7 @@ function App() {
       .me(token)
       .then(setProfile)
       .catch(() => {
-        localStorage.removeItem(tokenStorageKey);
+        clearStoredTokens();
         setToken(null);
       })
       .finally(() => setLoadingProfile(false));
@@ -376,7 +436,7 @@ function App() {
   }
 
   function storeToken(response: TokenResponse) {
-    localStorage.setItem(tokenStorageKey, response.access_token);
+    persistTokens(response);
     setToken(response.access_token);
     window.history.replaceState(null, "", "#dashboard");
   }
@@ -415,8 +475,16 @@ function App() {
     }
   }
 
-  function logout() {
-    localStorage.removeItem(tokenStorageKey);
+  async function logout() {
+    const refreshToken = localStorage.getItem(refreshTokenStorageKey);
+    if (refreshToken) {
+      try {
+        await api.logout(refreshToken);
+      } catch {
+        // Clear local session even if revoke fails.
+      }
+    }
+    clearStoredTokens();
     window.history.replaceState(null, "", window.location.pathname);
     setToken(null);
     setProfile(null);
@@ -610,6 +678,7 @@ function DashboardShell({
   const [mutualFundPortfolio, setMutualFundPortfolio] = useState<MutualFundPortfolio | null>(null);
   const [stockPortfolio, setStockPortfolio] = useState<StockPortfolio | null>(null);
   const [internationalPortfolio, setInternationalPortfolio] = useState<InternationalPortfolio | null>(null);
+  const [usdInrRate, setUsdInrRate] = useState<number | null>(null);
   const [netWorthOverview, setNetWorthOverview] = useState<NetWorthOverview | null>(null);
   const [monthDonutFocus, setMonthDonutFocus] = useState<"income" | "expenses" | null>(null);
   const [investmentOptions, setInvestmentOptions] = useState<InvestmentOptionsCatalog>({
@@ -693,7 +762,8 @@ function DashboardShell({
   const [editingHoldingId, setEditingHoldingId] = useState<string | null>(null);
   const [holdingEditForm, setHoldingEditForm] = useState({
     unitsOrQuantity: "",
-    avgPrice: ""
+    avgPrice: "",
+    optionId: ""
   });
   const [savingHoldingEdit, setSavingHoldingEdit] = useState(false);
   const [budgetForm, setBudgetForm] = useState({
@@ -843,10 +913,6 @@ function DashboardShell({
     }
     return [{ date: new Date().toISOString().slice(0, 10), value: netWorth }];
   }, [netWorthOverview, netWorth]);
-  const maxNetWorthValue = useMemo(
-    () => Math.max(...netWorthHistory.map((point) => point.value), 1),
-    [netWorthHistory]
-  );
   const monthlySpend = useMemo(() => {
     const now = new Date();
     return transactions
@@ -860,6 +926,34 @@ function DashboardShell({
       })
       .reduce((total, transaction) => total + parseAmount(transaction.amount), 0);
   }, [transactions]);
+  const spendingByCategory = useMemo(() => {
+    const now = new Date();
+    const categoryNameById = Object.fromEntries(
+      categoriesByKind.expense.map((category) => [String(category.id), category.name])
+    );
+    const totals = new Map<string, number>();
+    for (const transaction of transactions) {
+      if (transaction.transaction_type !== "EXPENSE") {
+        continue;
+      }
+      const date = new Date(transaction.date);
+      if (date.getUTCFullYear() !== now.getUTCFullYear() || date.getUTCMonth() !== now.getUTCMonth()) {
+        continue;
+      }
+      const key = transaction.category_id ? String(transaction.category_id) : "uncategorized";
+      totals.set(key, (totals.get(key) ?? 0) + Math.abs(parseAmount(transaction.amount)));
+    }
+    const rows = Array.from(totals.entries())
+      .map(([id, amount]) => ({
+        id,
+        name: id === "uncategorized" ? "Uncategorized" : categoryNameById[id] ?? "Category",
+        amount
+      }))
+      .sort((left, right) => right.amount - left.amount);
+    const maxAmount = Math.max(...rows.map((row) => row.amount), 1);
+    const totalAmount = rows.reduce((sum, row) => sum + row.amount, 0);
+    return { rows: rows.slice(0, 6), maxAmount, totalAmount };
+  }, [transactions, categoriesByKind.expense]);
   const monthlyIncome = useMemo(() => {
     const now = new Date();
     return transactions
@@ -887,13 +981,12 @@ function DashboardShell({
     }
     return source.slice(0, 2).toUpperCase() || "L";
   }, [displayName]);
-  const dateRangeLabel = useMemo(() => {
-    const end = new Date();
-    const start = new Date();
-    start.setDate(end.getDate() - 6);
-    const format = (value: Date) =>
-      value.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
-    return `${format(start)} – ${format(end)}`;
+  const [clockLabel, setClockLabel] = useState(() => formatClockLabel());
+  useEffect(() => {
+    const tick = () => setClockLabel(formatClockLabel());
+    tick();
+    const timer = window.setInterval(tick, 30_000);
+    return () => window.clearInterval(timer);
   }, []);
   const goalsCount = goals.length;
   const investmentCategoryById = useMemo(
@@ -918,7 +1011,7 @@ function DashboardShell({
       setLoadingWorkspace(true);
     }
     setWorkspaceError(null);
-    const [accountsResult, goalsResult, budgetsResult, transactionsResult, categoriesResult, tagsResult, mutualFundsResult, stocksResult, internationalResult, investmentOptionsResult, goalTemplatesResult, netWorthResult] =
+    const [accountsResult, goalsResult, budgetsResult, transactionsResult, categoriesResult, tagsResult, mutualFundsResult, stocksResult, internationalResult, investmentOptionsResult, goalTemplatesResult, netWorthResult, usdInrRateResult] =
       await Promise.allSettled([
       api.listAccounts(token),
       api.listGoals(token),
@@ -931,7 +1024,8 @@ function DashboardShell({
       api.listInternationalPortfolio(token),
       api.listInvestmentOptions(token),
       api.listGoalTemplates(token),
-      api.getNetWorth(token, 30)
+      api.getNetWorth(token, 30),
+      api.fetchInternationalCurrentPrice(token, "INR=X")
     ]);
 
     if (accountsResult.status === "fulfilled") {
@@ -969,6 +1063,11 @@ function DashboardShell({
     }
     if (netWorthResult.status === "fulfilled") {
       setNetWorthOverview(netWorthResult.value);
+    }
+    if (usdInrRateResult.status === "fulfilled") {
+      setUsdInrRate(parseAmount(usdInrRateResult.value.current_price));
+    } else {
+      setUsdInrRate(null);
     }
 
     const failed = [
@@ -1234,8 +1333,16 @@ function DashboardShell({
     setWorkspaceError(null);
     try {
       const result = await api.fetchStockCurrentPrice(token, symbol, stockForm.exchange || undefined);
-      setStockForm((current) => ({ ...current, currentPrice: result.current_price }));
-      setWorkspaceMessage(`Fetched current price for ${result.market_symbol}.`);
+      setStockForm((current) => ({
+        ...current,
+        currentPrice: result.current_price,
+        companyName: result.name?.trim() || current.companyName
+      }));
+      setWorkspaceMessage(
+        result.name
+          ? `Fetched ${result.name} at ${result.current_price} (${result.market_symbol}).`
+          : `Fetched current price for ${result.market_symbol}.`
+      );
     } catch (caught) {
       setWorkspaceError(caught instanceof ApiError ? caught.message : "Unable to fetch stock current price.");
     } finally {
@@ -1253,8 +1360,16 @@ function DashboardShell({
     setWorkspaceError(null);
     try {
       const result = await api.fetchInternationalCurrentPrice(token, symbol);
-      setInternationalForm((current) => ({ ...current, currentPrice: result.current_price }));
-      setWorkspaceMessage(`Fetched current price for ${result.market_symbol}.`);
+      setInternationalForm((current) => ({
+        ...current,
+        currentPrice: result.current_price,
+        securityName: result.name?.trim() || current.securityName
+      }));
+      setWorkspaceMessage(
+        result.name
+          ? `Fetched ${result.name} at ${result.current_price} (${result.market_symbol}).`
+          : `Fetched current price for ${result.market_symbol}.`
+      );
     } catch (caught) {
       setWorkspaceError(caught instanceof ApiError ? caught.message : "Unable to fetch international current price.");
     } finally {
@@ -1417,9 +1532,9 @@ function DashboardShell({
     setWorkspaceMessage(`Enter a target amount for ${template.name}.`);
   }
 
-  function startEditHolding(holdingId: string, unitsOrQuantity: string, avgPrice: string) {
+  function startEditHolding(holdingId: string, unitsOrQuantity: string, avgPrice: string, optionId?: string | null) {
     setEditingHoldingId(holdingId);
-    setHoldingEditForm({ unitsOrQuantity, avgPrice });
+    setHoldingEditForm({ unitsOrQuantity, avgPrice, optionId: optionId ?? "" });
     setWorkspaceError(null);
     setWorkspaceMessage(null);
   }
@@ -1436,17 +1551,20 @@ function DashboardShell({
       if (activeInvestmentTab === "Mutual Funds") {
         await api.updateMutualFundInvestment(token, editingHoldingId, {
           units: holdingEditForm.unitsOrQuantity,
-          avg_price: holdingEditForm.avgPrice
+          avg_price: holdingEditForm.avgPrice,
+          category_option_id: holdingEditForm.optionId || null
         });
       } else if (activeInvestmentTab === "Stocks") {
         await api.updateStockInvestment(token, editingHoldingId, {
           quantity: holdingEditForm.unitsOrQuantity,
-          avg_price: holdingEditForm.avgPrice
+          avg_price: holdingEditForm.avgPrice,
+          sector_option_id: holdingEditForm.optionId || null
         });
       } else if (activeInvestmentTab === "International Investment") {
         await api.updateInternationalInvestment(token, editingHoldingId, {
           quantity: holdingEditForm.unitsOrQuantity,
-          avg_price: holdingEditForm.avgPrice
+          avg_price: holdingEditForm.avgPrice,
+          sector_option_id: holdingEditForm.optionId || null
         });
       }
       setWorkspaceMessage("Holding updated.");
@@ -1548,24 +1666,51 @@ function DashboardShell({
   }
 
   function renderDashboardSection() {
-    const chartPoints = netWorthHistory.length > 14 ? netWorthHistory.filter((_, index) => index % 2 === 0 || index === netWorthHistory.length - 1) : netWorthHistory;
+    const chartPoints =
+      netWorthHistory.length > 14
+        ? netWorthHistory.filter((_, index) => index % 2 === 0 || index === netWorthHistory.length - 1)
+        : netWorthHistory;
     const monthTotal = monthlyIncome + monthlySpend;
     const expenseRatio = monthTotal > 0 ? monthlySpend / monthTotal : 0.55;
     const incomeRatio = 1 - expenseRatio;
-    const donutSize = 168;
-    const donutStroke = 22;
+    const donutSize = 120;
+    const donutStroke = 18;
     const donutRadius = (donutSize - donutStroke) / 2;
     const donutCircumference = 2 * Math.PI * donutRadius;
     const expenseArc = expenseRatio * donutCircumference;
     const incomeArc = incomeRatio * donutCircumference;
     const donutCenterValue = monthDonutFocus === "income" ? monthlyIncome : monthlySpend;
     const donutCenterLabel = monthDonutFocus === "income" ? "Income" : "Expenses";
+    const linePad = { top: 16, right: 12, bottom: 28, left: 12 };
+    const lineW = 560;
+    const lineH = 220;
+    const plotW = lineW - linePad.left - linePad.right;
+    const plotH = lineH - linePad.top - linePad.bottom;
+    const minWorth = Math.min(...chartPoints.map((point) => point.value));
+    const maxWorth = Math.max(...chartPoints.map((point) => point.value), minWorth);
+    const flatSeries = maxWorth === minWorth;
+    const worthSpan = flatSeries ? 1 : Math.max(maxWorth - minWorth, 1);
+    const lineCoords = chartPoints.map((point, index) => {
+      const x =
+        chartPoints.length === 1
+          ? linePad.left + plotW / 2
+          : linePad.left + (index / (chartPoints.length - 1)) * plotW;
+      const y = flatSeries
+        ? linePad.top + plotH * 0.58
+        : linePad.top + plotH - ((point.value - minWorth) / worthSpan) * plotH;
+      return { x, y, point };
+    });
+    const linePath = lineCoords.map((coord, index) => `${index === 0 ? "M" : "L"} ${coord.x} ${coord.y}`).join(" ");
+    const areaPath =
+      lineCoords.length > 0
+        ? `${linePath} L ${lineCoords[lineCoords.length - 1].x} ${linePad.top + plotH} L ${lineCoords[0].x} ${linePad.top + plotH} Z`
+        : "";
 
     return (
       <>
         <section className="dashboard-overview" aria-label="Dashboard overview">
           <article className="summary-card">
-            <p>Total balance</p>
+            <p>Networth</p>
             <div className="summary-card-value">
               <strong>{formatCurrency(netWorth)}</strong>
               <span className={`growth-badge ${netChangePercent < 0 ? "negative" : ""}`}>
@@ -1575,14 +1720,14 @@ function DashboardShell({
             </div>
           </article>
           <article className="summary-card">
-            <p>Liquid balance</p>
+            <p>Liquid Balance</p>
             <div className="summary-card-value">
               <strong>{formatCurrency(liquidBalance)}</strong>
             </div>
             <p className="summary-card-note">Wallet and bank accounts</p>
           </article>
           <article className="summary-card credit-usage-card">
-            <p>Credit card usage</p>
+            <p>Credit Card Usage</p>
             <div className="summary-card-value">
               <strong>{creditCardUsage.percent}%</strong>
             </div>
@@ -1657,7 +1802,6 @@ function DashboardShell({
             </div>
             <div className="expense-meta">
               <p>This month</p>
-              <strong>{formatCurrency(monthlySpend)}</strong>
               <button
                 type="button"
                 className={`legend-row interactive${monthDonutFocus === "income" ? " active" : ""}`}
@@ -1684,30 +1828,155 @@ function DashboardShell({
           </article>
         </section>
 
-        <section className="chart-panel networth-panel" aria-label="Net worth">
-          <div className="chart-panel-header">
-            <h2>Net worth</h2>
-            <strong className="networth-total">{formatCurrency(netWorth)}</strong>
-          </div>
-          <div className="networth-chart" aria-label="Net worth over time">
-            {chartPoints.map((point) => {
-              const height = Math.max(8, (point.value / maxNetWorthValue) * 150);
-              const label = new Date(`${point.date}T00:00:00`).toLocaleDateString(undefined, {
-                day: "numeric",
-                month: "short"
-              });
-              return (
-                <div key={point.date} className="networth-bar-group">
-                  <div
-                    className="networth-bar"
-                    style={{ height: `${height}px` }}
-                    title={`${label}: ${formatCurrency(point.value)}`}
-                  />
-                  <span className="networth-bar-label">{label}</span>
+        <section className="dashboard-charts" aria-label="Dashboard charts">
+          <section className="chart-panel networth-panel" aria-label="Networth graph">
+            <div className="chart-panel-header">
+              <h2>Networth Graph</h2>
+            </div>
+            <svg
+              className="networth-line-chart"
+              viewBox={`0 0 ${lineW} ${lineH}`}
+              role="img"
+              aria-label="Net worth over time"
+              preserveAspectRatio="xMidYMid meet"
+            >
+              <defs>
+                <linearGradient id="networthArea" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="rgba(119, 138, 251, 0.28)" />
+                  <stop offset="100%" stopColor="rgba(119, 138, 251, 0)" />
+                </linearGradient>
+              </defs>
+              {areaPath && <path d={areaPath} fill="url(#networthArea)" />}
+              {linePath && (
+                <path d={linePath} fill="none" stroke="var(--accent-blue)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+              )}
+              {lineCoords.map((coord) => {
+                const label = new Date(`${coord.point.date}T00:00:00`).toLocaleDateString(undefined, {
+                  day: "numeric",
+                  month: "short"
+                });
+                return (
+                  <g key={coord.point.date}>
+                    <circle cx={coord.x} cy={coord.y} r="4" fill="var(--accent-violet)" />
+                    <title>{`${label}: ${formatCurrency(coord.point.value)}`}</title>
+                  </g>
+                );
+              })}
+              {lineCoords
+                .filter((_, index) => index === 0 || index === lineCoords.length - 1 || index % Math.ceil(lineCoords.length / 4) === 0)
+                .map((coord) => {
+                  const label = new Date(`${coord.point.date}T00:00:00`).toLocaleDateString(undefined, {
+                    day: "numeric",
+                    month: "short"
+                  });
+                  return (
+                    <text
+                      key={`label-${coord.point.date}`}
+                      x={coord.x}
+                      y={lineH - 6}
+                      textAnchor="middle"
+                      className="networth-line-label"
+                    >
+                      {label}
+                    </text>
+                  );
+                })}
+            </svg>
+          </section>
+
+          <section className="chart-panel budget-overview-panel" aria-label="Budget overview">
+            <div className="chart-panel-header">
+              <h2>Budget Overview</h2>
+              <button className="rail-link" type="button" onClick={() => onSelectSection("Budget")}>
+                see all
+              </button>
+            </div>
+            <div className="budget-overview-list">
+              {budgets.length === 0 ? (
+                <div className="panel-empty compact">
+                  <strong>No budgets yet</strong>
+                  <p>Create a budget to track spending.</p>
                 </div>
-              );
-            })}
-          </div>
+              ) : (
+                budgets.slice(0, 5).map((budget) => {
+                  const budgetAmount = parseAmount(budget.amount);
+                  const spentAmount = parseAmount(budget.spent_amount);
+                  const usagePercent =
+                    budgetAmount > 0 ? Math.min(100, Math.round((spentAmount / budgetAmount) * 100)) : 0;
+                  return (
+                    <button
+                      key={budget.id}
+                      className="budget-overview-row"
+                      type="button"
+                      onClick={() => onSelectSection("Budget")}
+                    >
+                      <div className="budget-overview-copy">
+                        <strong>{budget.name}</strong>
+                        <p>
+                          {formatCurrency(spentAmount)} of {formatCurrency(budgetAmount)}
+                        </p>
+                      </div>
+                      <div
+                        className="budget-overview-track"
+                        role="progressbar"
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={usagePercent}
+                        aria-label={`${budget.name} ${usagePercent}% used`}
+                      >
+                        <span className="budget-overview-fill" style={{ width: `${usagePercent}%` }} />
+                      </div>
+                      <span className="budget-overview-percent">{usagePercent}%</span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </section>
+
+          <section className="chart-panel category-spend-panel" aria-label="Spending by category">
+            <div className="chart-panel-header">
+              <h2>Spending by Category</h2>
+              <button className="rail-link" type="button" onClick={() => onSelectSection("Transaction")}>
+                see all
+              </button>
+            </div>
+            <div className="category-spend-list">
+              {spendingByCategory.rows.length === 0 ? (
+                <div className="panel-empty compact">
+                  <strong>No spending yet</strong>
+                  <p>Expense categories will appear here this month.</p>
+                </div>
+              ) : (
+                spendingByCategory.rows.map((row) => {
+                  const sharePercent =
+                    spendingByCategory.totalAmount > 0
+                      ? Math.round((row.amount / spendingByCategory.totalAmount) * 100)
+                      : 0;
+                  const barPercent = Math.max(6, Math.round((row.amount / spendingByCategory.maxAmount) * 100));
+                  return (
+                    <div key={row.id} className="category-spend-row">
+                      <div className="category-spend-copy">
+                        <strong>{row.name}</strong>
+                        <span>{formatCurrency(row.amount)}</span>
+                      </div>
+                      <div
+                        className="category-spend-track"
+                        role="progressbar"
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={sharePercent}
+                        aria-label={`${row.name} ${sharePercent}% of spending`}
+                      >
+                        <span className="category-spend-fill" style={{ width: `${barPercent}%` }} />
+                      </div>
+                      <span className="category-spend-percent">{sharePercent}%</span>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </section>
         </section>
       </>
     );
@@ -2244,7 +2513,7 @@ function DashboardShell({
           </button>
         </form>
         <div className="data-list">
-          {accounts.map((account) => {
+          {accounts.slice(0, 3).map((account) => {
             const lowerName = account.name.toLowerCase();
             const isDefaultEditable = lowerName === "cash" || lowerName === "pending from friends";
             return (
@@ -2365,7 +2634,7 @@ function DashboardShell({
           {goals.length === 0 ? (
             <p>No goals yet. Add one above, or browse suggested goals.</p>
           ) : (
-            goals.map((goal) => {
+            goals.slice(0, 4).map((goal) => {
               const target = parseAmount(goal.target_amount);
               const current = parseAmount(goal.current_amount);
               const progress = target > 0 ? Math.min(100, (current / target) * 100) : 0;
@@ -2385,7 +2654,7 @@ function DashboardShell({
                       </div>
                       <span>{progress.toFixed(1)}%</span>
                     </div>
-                    {editingGoalId === goal.id ? (
+                    {editingGoalId === goal.id && (
                       <form className="workspace-form goal-edit-form" onSubmit={submitGoalEdit}>
                         <label>
                           Target amount
@@ -2432,13 +2701,16 @@ function DashboardShell({
                           </button>
                         </div>
                       </form>
-                    ) : (
+                    )}
+                  </div>
+                  <div className="goal-row-aside">
+                    <span>{goal.target_date ? new Date(goal.target_date).toLocaleDateString() : "No target date"}</span>
+                    {editingGoalId !== goal.id && (
                       <button className="subtle-action small-action" type="button" onClick={() => startEditGoal(goal)}>
                         Edit
                       </button>
                     )}
                   </div>
-                  <span>{goal.target_date ? new Date(goal.target_date).toLocaleDateString() : "No target date"}</span>
                 </article>
               );
             })
@@ -2550,6 +2822,7 @@ function DashboardShell({
   }
 
   function renderInvestmentSection() {
+    const isOverviewTab = activeInvestmentTab === "Overview";
     const isMutualFundsTab = activeInvestmentTab === "Mutual Funds";
     const isStocksTab = activeInvestmentTab === "Stocks";
     const isInternationalTab = activeInvestmentTab === "International Investment";
@@ -2571,6 +2844,269 @@ function DashboardShell({
         ))}
       </div>
     );
+
+    if (isOverviewTab) {
+      const mutualFundHoldings = mutualFundPortfolio?.holdings ?? [];
+      const stockHoldings = stockPortfolio?.holdings ?? [];
+      const internationalCurrentUsd = parseAmount(internationalPortfolio?.total_current_value ?? "0");
+      const internationalCurrentInr = usdInrRate !== null ? internationalCurrentUsd * usdInrRate : 0;
+      const internationalHoldings = internationalPortfolio?.holdings ?? [];
+
+      const mutualFundGoldInr = mutualFundHoldings
+        .filter((holding) => (holding.category_name ?? "").toLowerCase().includes("gold"))
+        .reduce((sum, holding) => sum + parseAmount(holding.current_value), 0);
+      const mutualFundInternationalInr = mutualFundHoldings
+        .filter((holding) => (holding.category_name ?? "").toLowerCase().includes("international"))
+        .reduce((sum, holding) => sum + parseAmount(holding.current_value), 0);
+      const mutualFundOtherInr = mutualFundHoldings
+        .filter((holding) => (holding.category_name ?? "").toLowerCase().includes("other"))
+        .reduce((sum, holding) => sum + parseAmount(holding.current_value), 0);
+      const mutualFundTotalInr = mutualFundHoldings.reduce(
+        (sum, holding) => sum + parseAmount(holding.current_value),
+        0
+      );
+
+      const stockGoldInr = stockHoldings
+        .filter((holding) => (holding.sector_name ?? "").toLowerCase().includes("gold"))
+        .reduce((sum, holding) => sum + parseAmount(holding.current_value), 0);
+      const stockOtherInr = stockHoldings
+        .filter((holding) => (holding.sector_name ?? "").toLowerCase().includes("other"))
+        .reduce((sum, holding) => sum + parseAmount(holding.current_value), 0);
+      const stockTotalInr = stockHoldings.reduce((sum, holding) => sum + parseAmount(holding.current_value), 0);
+
+      const goldValueInr = mutualFundGoldInr + stockGoldInr;
+      const othersValueInr = mutualFundOtherInr + stockOtherInr;
+      const indianEquityInr =
+        Math.max(0, mutualFundTotalInr - mutualFundGoldInr - mutualFundInternationalInr - mutualFundOtherInr) +
+        Math.max(0, stockTotalInr - stockGoldInr - stockOtherInr);
+
+      const allocationItems = [
+        { label: "Indian Equity", value: indianEquityInr, color: INVESTMENT_ALLOCATION_COLORS.indianEquity },
+        { label: "Gold", value: goldValueInr, color: INVESTMENT_ALLOCATION_COLORS.gold },
+        {
+          label: "International Investments",
+          value: internationalCurrentInr + mutualFundInternationalInr,
+          color: INVESTMENT_ALLOCATION_COLORS.international
+        },
+        {
+          label: "Others",
+          value: othersValueInr,
+          color: INVESTMENT_ALLOCATION_COLORS.others
+        }
+      ];
+      const allocationTotal = allocationItems.reduce((sum, item) => sum + item.value, 0);
+      const allocationGradient =
+        allocationTotal <= 0
+          ? "#eef2ff"
+          : `conic-gradient(${allocationItems
+              .reduce<{ color: string; from: number; to: number }[]>((segments, item, index) => {
+                const from = index === 0 ? 0 : segments[index - 1].to;
+                const to = from + (item.value / allocationTotal) * 100;
+                segments.push({ color: item.color, from, to });
+                return segments;
+              }, [])
+              .map((segment) => `${segment.color} ${segment.from}% ${segment.to}%`)
+              .join(", ")})`;
+
+      type GoalAllocation = {
+        goalId: string;
+        goalName: string;
+        indianEquity: number;
+        gold: number;
+        international: number;
+        others: number;
+      };
+
+      const goalAllocationMap = new Map<string, GoalAllocation>();
+      for (const goal of goals) {
+        goalAllocationMap.set(goal.id, {
+          goalId: goal.id,
+          goalName: goal.name,
+          indianEquity: 0,
+          gold: 0,
+          international: 0,
+          others: 0
+        });
+      }
+
+      const unassignedGoalKey = "__no_goal__";
+      const ensureUnassignedBucket = () => {
+        if (goalAllocationMap.has(unassignedGoalKey)) {
+          return;
+        }
+        goalAllocationMap.set(unassignedGoalKey, {
+          goalId: unassignedGoalKey,
+          goalName: "No goal",
+          indianEquity: 0,
+          gold: 0,
+          international: 0,
+          others: 0
+        });
+      };
+
+      for (const holding of mutualFundHoldings) {
+        const key = holding.goal_id ?? unassignedGoalKey;
+        if (!holding.goal_id) {
+          ensureUnassignedBucket();
+        }
+        const bucket = goalAllocationMap.get(key);
+        if (!bucket) {
+          continue;
+        }
+        const value = parseAmount(holding.current_value);
+        const categoryName = (holding.category_name ?? "").toLowerCase();
+        const isGold = categoryName.includes("gold");
+        const isInternationalFund = categoryName.includes("international");
+        const isOther = categoryName.includes("other");
+        if (isGold) {
+          bucket.gold += value;
+        } else if (isInternationalFund) {
+          bucket.international += value;
+        } else if (isOther) {
+          bucket.others += value;
+        } else {
+          bucket.indianEquity += value;
+        }
+      }
+
+      for (const holding of stockHoldings) {
+        const key = holding.goal_id ?? unassignedGoalKey;
+        if (!holding.goal_id) {
+          ensureUnassignedBucket();
+        }
+        const bucket = goalAllocationMap.get(key);
+        if (!bucket) {
+          continue;
+        }
+        const value = parseAmount(holding.current_value);
+        const sectorName = (holding.sector_name ?? "").toLowerCase();
+        const isGold = sectorName.includes("gold");
+        const isOther = sectorName.includes("other");
+        if (isGold) {
+          bucket.gold += value;
+        } else if (isOther) {
+          bucket.others += value;
+        } else {
+          bucket.indianEquity += value;
+        }
+      }
+
+      for (const holding of internationalHoldings) {
+        const key = holding.goal_id ?? unassignedGoalKey;
+        if (!holding.goal_id) {
+          ensureUnassignedBucket();
+        }
+        const bucket = goalAllocationMap.get(key);
+        if (!bucket) {
+          continue;
+        }
+        if (usdInrRate === null) {
+          continue;
+        } else {
+          bucket.international += parseAmount(holding.current_value) * usdInrRate;
+        }
+      }
+
+      const goalAllocations = Array.from(goalAllocationMap.values())
+        .map((entry) => {
+          const total = entry.indianEquity + entry.gold + entry.international + entry.others;
+          return { ...entry, total };
+        })
+        .filter((entry) => entry.total > 0)
+        .sort((left, right) => right.total - left.total);
+
+      return (
+        <div className="investment-section-shell">
+          {categoryPills}
+          <section className="workspace-panel">
+            <div>
+              <p className="eyebrow">Investment</p>
+              <h2>Overview</h2>
+            </div>
+            <section className="investment-overview-grid" aria-label="Investment asset allocation">
+              <article className="investment-allocation-card">
+                <p className="investment-allocation-title">Asset allocation (INR)</p>
+                <div className="investment-allocation-visual">
+                  <div className="investment-allocation-donut" style={{ background: allocationGradient }}>
+                    <div className="investment-allocation-center">
+                      <strong>{formatCurrency(allocationTotal)}</strong>
+                      <span>Total value</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="investment-allocation-legend">
+                  {allocationItems.map((item) => {
+                    const share = allocationTotal > 0 ? (item.value / allocationTotal) * 100 : 0;
+                    return (
+                      <article key={item.label} className="investment-allocation-row">
+                        <div className="investment-allocation-label">
+                          <span className="investment-allocation-dot" style={{ backgroundColor: item.color }} />
+                          <strong>{item.label}</strong>
+                        </div>
+                        <div className="investment-allocation-values">
+                          <span>{formatCurrency(item.value)}</span>
+                          <span>{share.toFixed(1)}%</span>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+                {usdInrRate === null && internationalCurrentUsd > 0 && (
+                  <p className="form-hint">USD/INR rate unavailable. International slice is temporarily excluded.</p>
+                )}
+              </article>
+              <article className="investment-goal-allocation-card">
+                <p className="investment-allocation-title">Asset allocation by goal (INR)</p>
+                {goalAllocations.length === 0 ? (
+                  <p className="form-hint">No goal-linked investments yet.</p>
+                ) : (
+                  <div className="investment-goal-allocation-list">
+                    {goalAllocations.map((goalAllocation) => {
+                      const indianShare = (goalAllocation.indianEquity / goalAllocation.total) * 100;
+                      const goldShare = (goalAllocation.gold / goalAllocation.total) * 100;
+                      const internationalShare = (goalAllocation.international / goalAllocation.total) * 100;
+                      const othersShare = (goalAllocation.others / goalAllocation.total) * 100;
+                      return (
+                        <article key={goalAllocation.goalId} className="investment-goal-allocation-row">
+                          <div className="investment-goal-allocation-header">
+                            <strong>{goalAllocation.goalName}</strong>
+                            <span>{formatCurrency(goalAllocation.total)}</span>
+                          </div>
+                          <div className="investment-goal-allocation-bar" role="img" aria-label={`${goalAllocation.goalName} asset allocation`}>
+                            <span
+                              className="indian-equity"
+                              style={{ width: `${indianShare}%`, backgroundColor: INVESTMENT_ALLOCATION_COLORS.indianEquity }}
+                            />
+                            <span
+                              className="gold"
+                              style={{ width: `${goldShare}%`, backgroundColor: INVESTMENT_ALLOCATION_COLORS.gold }}
+                            />
+                            <span
+                              className="international"
+                              style={{ width: `${internationalShare}%`, backgroundColor: INVESTMENT_ALLOCATION_COLORS.international }}
+                            />
+                            <span
+                              className="others"
+                              style={{ width: `${othersShare}%`, backgroundColor: INVESTMENT_ALLOCATION_COLORS.others }}
+                            />
+                          </div>
+                          <div className="investment-goal-allocation-breakdown">
+                            <span>Equity: {indianShare.toFixed(1)}%</span>
+                            <span>Gold: {goldShare.toFixed(1)}%</span>
+                            <span>International: {internationalShare.toFixed(1)}%</span>
+                            <span>Others: {othersShare.toFixed(1)}%</span>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+              </article>
+            </section>
+          </section>
+        </div>
+      );
+    }
 
     if (!isMutualFundsTab && !isStocksTab && !isInternationalTab) {
       return (
@@ -2613,6 +3149,10 @@ function DashboardShell({
     const totalCurrent = parseAmount(activePortfolio?.total_current_value ?? "0");
     const totalPnl = parseAmount(activePortfolio?.total_pnl ?? "0");
     const totalPnlPercent = parseAmount(activePortfolio?.total_pnl_percent ?? "0");
+    const totalInvestedInInr = isInternationalTab && usdInrRate !== null ? totalInvested * usdInrRate : null;
+    const totalCurrentInInr = isInternationalTab && usdInrRate !== null ? totalCurrent * usdInrRate : null;
+    const totalPnlInInr = isInternationalTab && usdInrRate !== null ? totalPnl * usdInrRate : null;
+    const totalTone = pnlTone(totalPnl);
 
     return (
       <div className="investment-section-shell">
@@ -2641,11 +3181,9 @@ function DashboardShell({
                 </button>
               </form>
 
-              <div className="data-list investment-search-results">
-                {mutualFundSearchResults.length === 0 ? (
-                  <p>No search results yet.</p>
-                ) : (
-                  mutualFundSearchResults.slice(0, 8).map((result) => (
+              {mutualFundSearchResults.length > 0 && (
+                <div className="data-list investment-search-results">
+                  {mutualFundSearchResults.slice(0, 8).map((result) => (
                     <article key={result.scheme_code} className="data-row compact-selection-row">
                       <div>
                         <strong>{result.scheme_name}</strong>
@@ -2663,31 +3201,26 @@ function DashboardShell({
                         Select
                       </button>
                     </article>
-                  ))
-                )}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             <form className="workspace-form investment-form compact-investment-form" onSubmit={submitMutualFundInvestment}>
-              <div className="selected-mf-block">
-                <p className="eyebrow">Selected mutual fund</p>
-                {selectedMutualFund ? (
-                  <>
-                    <strong>{selectedMutualFund.scheme_name}</strong>
-                    <p>
-                      Code: {selectedMutualFund.scheme_code}
-                      {selectedMutualFund.fund_house ? ` | ${selectedMutualFund.fund_house}` : ""}
-                    </p>
-                    <p>
-                      Latest NAV: {selectedMutualFund.nav !== null ? formatCurrency(parseAmount(selectedMutualFund.nav)) : "N/A"}
-                      {" | "}
-                      Date: {formatOptionalDate(selectedMutualFund.date)}
-                    </p>
-                  </>
-                ) : (
-                  <p>Select a mutual fund from the search results above.</p>
-                )}
-              </div>
+              {selectedMutualFund && (
+                <div className="selected-mf-block">
+                  <strong>{selectedMutualFund.scheme_name}</strong>
+                  <p>
+                    Code: {selectedMutualFund.scheme_code}
+                    {selectedMutualFund.fund_house ? ` | ${selectedMutualFund.fund_house}` : ""}
+                  </p>
+                  <p>
+                    Latest NAV: {selectedMutualFund.nav !== null ? formatCurrency(parseAmount(selectedMutualFund.nav)) : "N/A"}
+                    {" | "}
+                    Date: {formatOptionalDate(selectedMutualFund.date)}
+                  </p>
+                </div>
+              )}
               <div className="investment-inline-fields">
                 <label>
                   Goal tag
@@ -2752,10 +3285,10 @@ function DashboardShell({
                 <p>Current value</p>
                 <strong>{formatCurrency(totalCurrent)}</strong>
               </article>
-              <article>
+              <article className={`pnl-summary pnl-summary--${totalTone}`}>
                 <p>Total P/L</p>
-                <strong className={totalPnl >= 0 ? "amount-positive" : "amount-negative"}>
-                  {formatSignedCurrency(totalPnl)} ({totalPnlPercent.toFixed(2)}%)
+                <strong className={pnlAmountClass(totalTone)}>
+                  {formatSignedCurrency(totalPnl)} ({formatPnlPercent(totalPnlPercent)})
                 </strong>
               </article>
             </section>
@@ -2786,9 +3319,10 @@ function DashboardShell({
                     {mutualFundPortfolio.holdings.map((holding) => {
                       const pnlValue = parseAmount(holding.pnl);
                       const pnlPercent = parseAmount(holding.pnl_percent);
+                      const tone = pnlTone(pnlValue);
                       const isEditing = editingHoldingId === holding.id;
                       return (
-                        <tr key={holding.id}>
+                        <tr key={holding.id} className={`holding-row holding-row--${tone}`}>
                           <td>{holding.scheme_code}</td>
                           <td>
                             {isEditing ? (
@@ -2818,16 +3352,34 @@ function DashboardShell({
                               holding.avg_price
                             )}
                           </td>
-                          <td>{holding.category_name ?? "-"}</td>
+                          <td>
+                            {isEditing ? (
+                              <select
+                                className="table-edit-input"
+                                value={holdingEditForm.optionId}
+                                onChange={(event) => setHoldingEditForm({ ...holdingEditForm, optionId: event.target.value })}
+                              >
+                                <option value="">No category</option>
+                                {investmentOptions.mutual_fund_categories.map((option) => (
+                                  <option key={option.id} value={option.id}>
+                                    {option.display_name}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              holding.category_name ?? "-"
+                            )}
+                          </td>
                           <td title={holding.scheme_name} className="table-text-ellipsis">{holding.scheme_name}</td>
                           <td>{holding.nav ?? "-"}</td>
                           <td>{formatOptionalDate(holding.nav_date)}</td>
                           <td>{formatCurrency(parseAmount(holding.invested_amount))}</td>
                           <td>{formatCurrency(parseAmount(holding.current_value))}</td>
-                          <td className={pnlValue >= 0 ? "amount-positive" : "amount-negative"}>{formatSignedCurrency(pnlValue)}</td>
-                          <td className={pnlPercent >= 0 ? "amount-positive" : "amount-negative"}>
-                            {pnlPercent >= 0 ? "+" : ""}
-                            {pnlPercent.toFixed(2)}%
+                          <td>
+                            <span className={`pnl-chip pnl-chip--${tone}`}>{formatSignedCurrency(pnlValue)}</span>
+                          </td>
+                          <td>
+                            <span className={`pnl-chip pnl-chip--${tone}`}>{formatPnlPercent(pnlPercent)}</span>
                           </td>
                           <td>{holding.goal_name ?? "-"}</td>
                           <td>
@@ -2844,7 +3396,9 @@ function DashboardShell({
                               <button
                                 className="subtle-action small-action"
                                 type="button"
-                                onClick={() => startEditHolding(holding.id, holding.units, holding.avg_price)}
+                                onClick={() =>
+                                  startEditHolding(holding.id, holding.units, holding.avg_price, holding.category_option_id)
+                                }
                               >
                                 <Pencil size={14} />
                               </button>
@@ -2941,10 +3495,10 @@ function DashboardShell({
                 <p>Current value</p>
                 <strong>{formatCurrency(totalCurrent)}</strong>
               </article>
-              <article>
+              <article className={`pnl-summary pnl-summary--${totalTone}`}>
                 <p>Total P/L</p>
-                <strong className={totalPnl >= 0 ? "amount-positive" : "amount-negative"}>
-                  {formatSignedCurrency(totalPnl)} ({totalPnlPercent.toFixed(2)}%)
+                <strong className={pnlAmountClass(totalTone)}>
+                  {formatSignedCurrency(totalPnl)} ({formatPnlPercent(totalPnlPercent)})
                 </strong>
               </article>
             </section>
@@ -2973,9 +3527,10 @@ function DashboardShell({
                     {stockPortfolio.holdings.map((holding) => {
                       const pnlValue = parseAmount(holding.pnl);
                       const pnlPercent = parseAmount(holding.pnl_percent);
+                      const tone = pnlTone(pnlValue);
                       const isEditing = editingHoldingId === holding.id;
                       return (
-                        <tr key={holding.id}>
+                        <tr key={holding.id} className={`holding-row holding-row--${tone}`}>
                           <td>{holding.symbol}</td>
                           <td>
                             {isEditing ? (
@@ -3005,17 +3560,35 @@ function DashboardShell({
                               holding.avg_price
                             )}
                           </td>
-                          <td>{holding.sector_name ?? "-"}</td>
+                          <td>
+                            {isEditing ? (
+                              <select
+                                className="table-edit-input"
+                                value={holdingEditForm.optionId}
+                                onChange={(event) => setHoldingEditForm({ ...holdingEditForm, optionId: event.target.value })}
+                              >
+                                <option value="">No sector</option>
+                                {investmentOptions.stock_sectors.map((option) => (
+                                  <option key={option.id} value={option.id}>
+                                    {option.display_name}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              holding.sector_name ?? "-"
+                            )}
+                          </td>
                           <td title={holding.company_name ?? "Stock"} className="table-text-ellipsis">
                             {holding.company_name ?? "Stock"}
                           </td>
                           <td>{holding.current_price}</td>
                           <td>{formatCurrency(parseAmount(holding.invested_amount))}</td>
                           <td>{formatCurrency(parseAmount(holding.current_value))}</td>
-                          <td className={pnlValue >= 0 ? "amount-positive" : "amount-negative"}>{formatSignedCurrency(pnlValue)}</td>
-                          <td className={pnlPercent >= 0 ? "amount-positive" : "amount-negative"}>
-                            {pnlPercent >= 0 ? "+" : ""}
-                            {pnlPercent.toFixed(2)}%
+                          <td>
+                            <span className={`pnl-chip pnl-chip--${tone}`}>{formatSignedCurrency(pnlValue)}</span>
+                          </td>
+                          <td>
+                            <span className={`pnl-chip pnl-chip--${tone}`}>{formatPnlPercent(pnlPercent)}</span>
                           </td>
                           <td>{holding.goal_name ?? "-"}</td>
                           <td>
@@ -3032,7 +3605,9 @@ function DashboardShell({
                               <button
                                 className="subtle-action small-action"
                                 type="button"
-                                onClick={() => startEditHolding(holding.id, holding.quantity, holding.avg_price)}
+                                onClick={() =>
+                                  startEditHolding(holding.id, holding.quantity, holding.avg_price, holding.sector_option_id)
+                                }
                               >
                                 <Pencil size={14} />
                               </button>
@@ -3109,8 +3684,8 @@ function DashboardShell({
                   Quantity
                   <input
                     required
-                    min="0.001"
-                    step="0.001"
+                    min="0.000001"
+                    step="0.000001"
                     type="number"
                     value={internationalForm.quantity}
                     onChange={(event) => setInternationalForm({ ...internationalForm, quantity: event.target.value })}
@@ -3153,18 +3728,30 @@ function DashboardShell({
 
             <section className="dashboard-grid investment-summary-grid" aria-label="Investment summary">
               <article>
-                <p>Total invested</p>
-                <strong>{formatCurrency(totalInvested)}</strong>
+                <p>Total invested (USD)</p>
+                <strong>{formatUsdCurrency(totalInvested)}</strong>
               </article>
               <article>
-                <p>Current value</p>
-                <strong>{formatCurrency(totalCurrent)}</strong>
+                <p>Current value (USD)</p>
+                <strong>{formatUsdCurrency(totalCurrent)}</strong>
               </article>
-              <article>
-                <p>Total P/L</p>
-                <strong className={totalPnl >= 0 ? "amount-positive" : "amount-negative"}>
-                  {formatSignedCurrency(totalPnl)} ({totalPnlPercent.toFixed(2)}%)
+              <article className={`pnl-summary pnl-summary--${totalTone}`}>
+                <p>Total P/L (USD)</p>
+                <strong className={pnlAmountClass(totalTone)}>
+                  {formatSignedUsdCurrency(totalPnl)} ({formatPnlPercent(totalPnlPercent)})
                 </strong>
+              </article>
+              <article>
+                <p>Total invested (INR)</p>
+                <strong>{totalInvestedInInr === null ? "N/A" : formatCurrency(totalInvestedInInr)}</strong>
+              </article>
+              <article>
+                <p>Current value (INR)</p>
+                <strong>{totalCurrentInInr === null ? "N/A" : formatCurrency(totalCurrentInInr)}</strong>
+              </article>
+              <article>
+                <p>Total P/L (INR)</p>
+                <strong>{totalPnlInInr === null ? "N/A" : formatSignedCurrency(totalPnlInInr)}</strong>
               </article>
             </section>
 
@@ -3193,16 +3780,17 @@ function DashboardShell({
                     {internationalPortfolio.holdings.map((holding) => {
                       const pnlValue = parseAmount(holding.pnl);
                       const pnlPercent = parseAmount(holding.pnl_percent);
+                      const tone = pnlTone(pnlValue);
                       const isEditing = editingHoldingId === holding.id;
                       return (
-                        <tr key={holding.id}>
+                        <tr key={holding.id} className={`holding-row holding-row--${tone}`}>
                           <td>{holding.symbol}</td>
                           <td>
                             {isEditing ? (
                               <input
                                 className="table-edit-input"
-                                min="0.001"
-                                step="0.001"
+                                min="0.000001"
+                                step="0.000001"
                                 type="number"
                                 value={holdingEditForm.unitsOrQuantity}
                                 onChange={(event) => setHoldingEditForm({ ...holdingEditForm, unitsOrQuantity: event.target.value })}
@@ -3222,20 +3810,38 @@ function DashboardShell({
                                 onChange={(event) => setHoldingEditForm({ ...holdingEditForm, avgPrice: event.target.value })}
                               />
                             ) : (
-                              holding.avg_price
+                              formatUsdCurrency(parseAmount(holding.avg_price))
                             )}
                           </td>
-                          <td>{holding.sector_name ?? "-"}</td>
+                          <td>
+                            {isEditing ? (
+                              <select
+                                className="table-edit-input"
+                                value={holdingEditForm.optionId}
+                                onChange={(event) => setHoldingEditForm({ ...holdingEditForm, optionId: event.target.value })}
+                              >
+                                <option value="">No sector</option>
+                                {investmentOptions.international_sectors.map((option) => (
+                                  <option key={option.id} value={option.id}>
+                                    {option.display_name}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              holding.sector_name ?? "-"
+                            )}
+                          </td>
                           <td title={holding.security_name ?? holding.symbol} className="table-text-ellipsis">
                             {holding.security_name ?? holding.symbol}
                           </td>
-                          <td>{holding.current_price}</td>
-                          <td>{formatCurrency(parseAmount(holding.invested_amount))}</td>
-                          <td>{formatCurrency(parseAmount(holding.current_value))}</td>
-                          <td className={pnlValue >= 0 ? "amount-positive" : "amount-negative"}>{formatSignedCurrency(pnlValue)}</td>
-                          <td className={pnlPercent >= 0 ? "amount-positive" : "amount-negative"}>
-                            {pnlPercent >= 0 ? "+" : ""}
-                            {pnlPercent.toFixed(2)}%
+                          <td>{formatUsdCurrency(parseAmount(holding.current_price))}</td>
+                          <td>{formatUsdCurrency(parseAmount(holding.invested_amount))}</td>
+                          <td>{formatUsdCurrency(parseAmount(holding.current_value))}</td>
+                          <td>
+                            <span className={`pnl-chip pnl-chip--${tone}`}>{formatSignedUsdCurrency(pnlValue)}</span>
+                          </td>
+                          <td>
+                            <span className={`pnl-chip pnl-chip--${tone}`}>{formatPnlPercent(pnlPercent)}</span>
                           </td>
                           <td>{holding.goal_name ?? "-"}</td>
                           <td>
@@ -3252,7 +3858,9 @@ function DashboardShell({
                               <button
                                 className="subtle-action small-action"
                                 type="button"
-                                onClick={() => startEditHolding(holding.id, holding.quantity, holding.avg_price)}
+                                onClick={() =>
+                                  startEditHolding(holding.id, holding.quantity, holding.avg_price, holding.sector_option_id)
+                                }
                               >
                                 <Pencil size={14} />
                               </button>
@@ -3384,12 +3992,6 @@ function DashboardShell({
             <h1>{activeSection}</h1>
           </div>
           <div className="topbar-actions">
-            {activeSection === "Dashboard" && (
-              <button className="date-range-pill" type="button">
-                {dateRangeLabel}
-                <ChevronDown size={16} />
-              </button>
-            )}
             <button
               className="subtle-action add-transaction-action"
               type="button"
@@ -3498,6 +4100,9 @@ function DashboardShell({
       {showRightRail && (
         <aside className="right-rail" aria-label="Account overview">
           <div className="rail-header">
+            <time className="rail-clock" dateTime={new Date().toISOString()}>
+              {clockLabel}
+            </time>
             <button className="rail-icon-btn" type="button" aria-label="Notifications">
               <Bell size={18} />
               <span className="notif-dot" />
@@ -3507,69 +4112,92 @@ function DashboardShell({
             </button>
           </div>
 
-          <section className="rail-section">
-            <div className="rail-section-header">
-              <h3>Accounts</h3>
-              <button className="rail-link" type="button" onClick={() => onSelectSection("Accounts")}>
-                Manage
-              </button>
-            </div>
-            <div className="account-balance-list">
-              {accounts.length === 0 ? (
-                <p>No accounts yet.</p>
-              ) : (
-                accounts.map((account) => (
-                  <button
-                    key={account.id}
-                    className="account-balance-row"
-                    type="button"
-                    onClick={() => onSelectSection("Accounts")}
-                  >
-                    <div>
-                      <strong>{account.name}</strong>
-                      <p>{account.account_type}</p>
-                    </div>
-                    <span>{formatCurrency(parseAmount(account.current_balance))}</span>
-                  </button>
-                ))
-              )}
-              <button className="account-balance-row add" type="button" onClick={() => onSelectSection("Accounts")}>
-                <span>Add account</span>
-                <Plus size={16} />
-              </button>
-            </div>
-          </section>
-
-          <section className="rail-section">
-            <div className="rail-section-header">
-              <h3>Recent activity</h3>
-              <button className="rail-link" type="button" onClick={() => onSelectSection("Transaction")}>
-                See all
-              </button>
-            </div>
-            <div className="activity-list">
-              {transactions.length === 0 ? (
-                <p>No activity yet.</p>
-              ) : (
-                transactions.slice(0, 5).map((transaction) => {
-                  const label = transaction.merchant || transaction.transaction_type;
-                  return (
-                    <article key={transaction.id} className="activity-item">
-                      <div className="activity-avatar">{label.slice(0, 2).toUpperCase()}</div>
-                      <div className="activity-body">
-                        <strong>{label}</strong>
-                        <p>{new Date(transaction.date).toLocaleDateString()}</p>
+          <div className="rail-stack-card">
+            <section className="rail-section">
+              <div className="rail-section-header">
+                <h3>Accounts</h3>
+                <button className="rail-link" type="button" onClick={() => onSelectSection("Accounts")}>
+                  see all
+                </button>
+              </div>
+              <div className="account-balance-list">
+                {accounts.length === 0 ? (
+                  <div className="panel-empty compact">
+                    <strong>No accounts yet</strong>
+                    <p>Add a wallet or bank account to get started.</p>
+                  </div>
+                ) : (
+                  accounts.slice(0, 3).map((account) => (
+                    <button
+                      key={account.id}
+                      className="account-balance-row"
+                      type="button"
+                      onClick={() => onSelectSection("Accounts")}
+                    >
+                      <div>
+                        <strong>{account.name}</strong>
+                        <p>{account.account_type}</p>
                       </div>
-                      <span className={`activity-amount ${transactionAmountClass(transaction.transaction_type)}`}>
-                        {transactionAmountPrefix(transaction.transaction_type)}
-                        {formatCurrency(parseAmount(transaction.amount))}
-                      </span>
-                    </article>
-                  );
-                })
-              )}
-            </div>
-          </section>
+                      <span>{formatCurrency(parseAmount(account.current_balance))}</span>
+                    </button>
+                  ))
+                )}
+                <button className="account-balance-row add" type="button" onClick={() => onSelectSection("Accounts")}>
+                  <span>Add account</span>
+                  <Plus size={16} />
+                </button>
+              </div>
+            </section>
+
+            <section className="rail-section">
+              <div className="rail-section-header">
+                <h3>Goal Overview</h3>
+                <button className="rail-link" type="button" onClick={() => onSelectSection("Goal")}>
+                  see all
+                </button>
+              </div>
+              <div className="budget-overview-list">
+                {goals.length === 0 ? (
+                  <div className="panel-empty compact">
+                    <strong>No goals yet</strong>
+                    <p>Set a goal to track progress.</p>
+                  </div>
+                ) : (
+                  goals.slice(0, 4).map((goal) => {
+                    const target = parseAmount(goal.target_amount);
+                    const current = parseAmount(goal.current_amount);
+                    const progress = target > 0 ? Math.min(100, Math.round((current / target) * 100)) : 0;
+                    return (
+                      <button
+                        key={goal.id}
+                        className="budget-overview-row"
+                        type="button"
+                        onClick={() => onSelectSection("Goal")}
+                      >
+                        <div className="budget-overview-copy">
+                          <strong>{goal.name}</strong>
+                          <p>
+                            {formatCurrency(current)} of {formatCurrency(target)}
+                          </p>
+                        </div>
+                        <div
+                          className="budget-overview-track"
+                          role="progressbar"
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                          aria-valuenow={progress}
+                          aria-label={`${goal.name} ${progress}% complete`}
+                        >
+                          <span className="budget-overview-fill" style={{ width: `${progress}%` }} />
+                        </div>
+                        <span className="budget-overview-percent">{progress}%</span>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </section>
+          </div>
         </aside>
       )}
     </main>

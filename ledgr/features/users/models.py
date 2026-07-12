@@ -36,6 +36,29 @@ class UserModel(SQLModel, table=True):
     )
 
 
+class RefreshTokenModel(SQLModel, table=True):
+    __tablename__ = "refresh_tokens"
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True, index=True)
+    user_id: UUID = Field(foreign_key="users.id", index=True, nullable=False)
+    token_hash: str = Field(max_length=64, unique=True, index=True)
+    expires_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False, index=True),
+    )
+    revoked_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+    created_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+        ),
+    )
+
+
 class AccountModel(SQLModel, table=True):
     __tablename__ = "accounts"
     __table_args__ = (

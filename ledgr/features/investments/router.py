@@ -28,6 +28,8 @@ from ledgr.features.investments.schemas import (
     StockInvestmentUpsertResponse,
 )
 from ledgr.features.investments.service import (
+    MarketDataRateLimited,
+    MarketDataUnavailable,
     create_investment_option,
     fetch_current_price,
     get_investment_option_by_id,
@@ -240,10 +242,17 @@ def get_stock_current_price(
     del session
     del current_user
     try:
-        market_symbol, current_price = fetch_current_price(symbol=symbol, exchange=exchange, market="IN")
-    except ValueError as exc:
+        market_symbol, current_price, name = fetch_current_price(symbol=symbol, exchange=exchange, market="IN")
+    except MarketDataRateLimited as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
+    except (MarketDataUnavailable, ValueError) as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
-    return CurrentPriceResponse(symbol=symbol.upper(), market_symbol=market_symbol, current_price=current_price)
+    return CurrentPriceResponse(
+        symbol=symbol.upper(),
+        market_symbol=market_symbol,
+        current_price=current_price,
+        name=name,
+    )
 
 
 @router.get("/international/current-price", response_model=CurrentPriceResponse)
@@ -255,10 +264,17 @@ def get_international_current_price(
     del session
     del current_user
     try:
-        market_symbol, current_price = fetch_current_price(symbol=symbol, market="US")
-    except ValueError as exc:
+        market_symbol, current_price, name = fetch_current_price(symbol=symbol, market="US")
+    except MarketDataRateLimited as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
+    except (MarketDataUnavailable, ValueError) as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
-    return CurrentPriceResponse(symbol=symbol.upper(), market_symbol=market_symbol, current_price=current_price)
+    return CurrentPriceResponse(
+        symbol=symbol.upper(),
+        market_symbol=market_symbol,
+        current_price=current_price,
+        name=name,
+    )
 
 
 @router.post(

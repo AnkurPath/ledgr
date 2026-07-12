@@ -4,6 +4,7 @@ from decimal import Decimal
 from typing import Optional
 
 os.environ["LEDGR_DATABASE_URL"] = "sqlite://"
+os.environ["LEDGR_RATE_LIMIT_ENABLED"] = "false"
 
 from fastapi.testclient import TestClient
 from sqlalchemy.pool import StaticPool
@@ -228,6 +229,220 @@ def test_mutual_fund_investment_can_be_tagged_with_goal() -> None:
     assert portfolio["holdings"][0]["goal_name"] == "Retirement"
 
 
+def test_same_mutual_fund_can_be_added_under_different_goals() -> None:
+    client = make_test_client()
+    token = register_user(client, email="mf-two-goals@example.com")
+    seed_mutual_funds(client)
+    headers = auth_headers(token)
+
+    retirement = client.post(
+        "/goals",
+        json={"name": "Retirement", "target_amount": "5000000.00"},
+        headers=headers,
+    ).json()
+    travel = client.post(
+        "/goals",
+        json={"name": "Travel", "target_amount": "300000.00"},
+        headers=headers,
+    ).json()
+
+    first = client.post(
+        "/investments/mutual-funds",
+        json={
+            "scheme_code": 100001,
+            "goal_id": retirement["id"],
+            "units": "10.000",
+            "avg_price": "100.000",
+        },
+        headers=headers,
+    )
+    second = client.post(
+        "/investments/mutual-funds",
+        json={
+            "scheme_code": 100001,
+            "goal_id": travel["id"],
+            "units": "5.000",
+            "avg_price": "110.000",
+        },
+        headers=headers,
+    )
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert first.json()["id"] != second.json()["id"]
+
+    portfolio = client.get("/investments/mutual-funds", headers=headers)
+    assert portfolio.status_code == 200
+    holdings = portfolio.json()["holdings"]
+    assert len(holdings) == 2
+    by_goal = {holding["goal_name"]: holding for holding in holdings}
+    assert by_goal["Retirement"]["units"] == "10.000"
+    assert by_goal["Travel"]["units"] == "5.000"
+
+    # Same fund + same goal still merges.
+    merged = client.post(
+        "/investments/mutual-funds",
+        json={
+            "scheme_code": 100001,
+            "goal_id": retirement["id"],
+            "units": "2.000",
+            "avg_price": "120.000",
+        },
+        headers=headers,
+    )
+    assert merged.status_code == 201
+    assert merged.json()["id"] == first.json()["id"]
+    assert merged.json()["units"] == "12.000"
+
+
+def test_same_stock_can_be_added_under_different_goals() -> None:
+    client = make_test_client()
+    token = register_user(client, email="stock-two-goals@example.com")
+    headers = auth_headers(token)
+
+    retirement = client.post(
+        "/goals",
+        json={"name": "Retirement", "target_amount": "5000000.00"},
+        headers=headers,
+    ).json()
+    travel = client.post(
+        "/goals",
+        json={"name": "Travel", "target_amount": "300000.00"},
+        headers=headers,
+    ).json()
+
+    first = client.post(
+        "/investments/stocks",
+        json={
+            "symbol": "TCS",
+            "company_name": "Tata Consultancy Services",
+            "exchange": "NSE",
+            "goal_id": retirement["id"],
+            "quantity": "10.000",
+            "avg_price": "1000.000",
+            "current_price": "1100.000",
+        },
+        headers=headers,
+    )
+    second = client.post(
+        "/investments/stocks",
+        json={
+            "symbol": "TCS",
+            "company_name": "Tata Consultancy Services",
+            "exchange": "NSE",
+            "goal_id": travel["id"],
+            "quantity": "3.000",
+            "avg_price": "1050.000",
+            "current_price": "1100.000",
+        },
+        headers=headers,
+    )
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert first.json()["id"] != second.json()["id"]
+
+    holdings = client.get("/investments/stocks", headers=headers).json()["holdings"]
+    assert len(holdings) == 2
+    by_goal = {holding["goal_name"]: holding for holding in holdings}
+    assert by_goal["Retirement"]["quantity"] == "10.000"
+    assert by_goal["Travel"]["quantity"] == "3.000"
+
+
+def test_same_international_symbol_can_be_added_under_different_goals() -> None:
+    client = make_test_client()
+    token = register_user(client, email="intl-two-goals@example.com")
+    headers = auth_headers(token)
+
+    options = client.get("/investments/options", headers=headers).json()
+    sector_id = options["international_sectors"][0]["id"]
+
+    retirement = client.post(
+        "/goals",
+        json={"name": "Retirement", "target_amount": "5000000.00"},
+        headers=headers,
+    ).json()
+    travel = client.post(
+        "/goals",
+        json={"name": "Travel", "target_amount": "300000.00"},
+        headers=headers,
+    ).json()
+
+    first = client.post(
+        "/investments/international",
+        json={
+            "symbol": "AAPL",
+            "security_name": "Apple Inc.",
+            "instrument_type": "stock",
+            "sector_option_id": sector_id,
+            "goal_id": retirement["id"],
+            "quantity": "4.000",
+            "avg_price": "180.000",
+            "current_price": "200.000",
+        },
+        headers=headers,
+    )
+    second = client.post(
+        "/investments/international",
+        json={
+            "symbol": "AAPL",
+            "security_name": "Apple Inc.",
+            "instrument_type": "stock",
+            "sector_option_id": sector_id,
+            "goal_id": travel["id"],
+            "quantity": "2.000",
+            "avg_price": "190.000",
+            "current_price": "200.000",
+        },
+        headers=headers,
+    )
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert first.json()["id"] != second.json()["id"]
+
+    holdings = client.get("/investments/international", headers=headers).json()["holdings"]
+    assert len(holdings) == 2
+    by_goal = {holding["goal_name"]: holding for holding in holdings}
+    assert by_goal["Retirement"]["quantity"] == "4.000000"
+    assert by_goal["Travel"]["quantity"] == "2.000000"
+
+
+def test_international_investment_quantity_supports_six_decimal_places() -> None:
+    client = make_test_client()
+    token = register_user(client, email="intl-six-decimals@example.com")
+    headers = auth_headers(token)
+
+    options = client.get("/investments/options", headers=headers).json()
+    sector_id = options["international_sectors"][0]["id"]
+
+    create_response = client.post(
+        "/investments/international",
+        json={
+            "symbol": "AAPL",
+            "security_name": "Apple Inc.",
+            "instrument_type": "stock",
+            "sector_option_id": sector_id,
+            "quantity": "1.1234564",
+            "avg_price": "180.000",
+            "current_price": "200.000",
+        },
+        headers=headers,
+    )
+    assert create_response.status_code == 201
+    created = create_response.json()
+    assert created["quantity"] == "1.123456"
+
+    update_response = client.patch(
+        f"/investments/international/{created['id']}",
+        json={
+            "quantity": "1.9999995",
+            "avg_price": "180.000",
+        },
+        headers=headers,
+    )
+    assert update_response.status_code == 200
+    updated = update_response.json()
+    assert updated["quantity"] == "2.000000"
+
+
 def test_add_stock_investment_and_list_portfolio() -> None:
     client = make_test_client()
     token = register_user(client, email="stocks@example.com")
@@ -278,7 +493,7 @@ def test_add_stock_investment_auto_fetches_current_price_when_missing() -> None:
     def fake_fetch_current_price(*, symbol: str, exchange: Optional[str] = None, market: str = "IN"):
         del exchange
         del market
-        return symbol, Decimal("245.750")
+        return symbol, Decimal("245.750"), "Tata Consultancy Services"
 
     investment_service.fetch_current_price = fake_fetch_current_price
     try:
@@ -297,6 +512,7 @@ def test_add_stock_investment_auto_fetches_current_price_when_missing() -> None:
 
     assert create_response.status_code == 201
     assert create_response.json()["current_price"] == "245.750"
+    assert create_response.json()["company_name"] == "Tata Consultancy Services"
 
 
 def test_add_international_investment_auto_fetches_current_price() -> None:
@@ -313,7 +529,7 @@ def test_add_international_investment_auto_fetches_current_price() -> None:
     def fake_fetch_current_price(*, symbol: str, exchange: Optional[str] = None, market: str = "IN"):
         del exchange
         del market
-        return symbol, Decimal("5100.250")
+        return symbol, Decimal("5100.250"), "Example Security"
 
     investment_service.fetch_current_price = fake_fetch_current_price
     try:
@@ -336,6 +552,7 @@ def test_add_international_investment_auto_fetches_current_price() -> None:
     assert created["symbol"] == "^GSPC"
     assert created["sector_option_id"] == international_sector_id
     assert created["current_price"] == "5100.250"
+    assert created["security_name"] == "Example Security"
 
 
 def test_investment_options_can_be_used_for_stock_and_mutual_fund() -> None:

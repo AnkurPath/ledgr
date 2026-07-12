@@ -30,7 +30,7 @@ class AccountTypeEnum(str, Enum):
 
 class UserRegister(BaseModel):
     email: EmailStr = Field(..., min_length=5, max_length=255, description="Email will be used as username")
-    password: str = Field(..., min_length=4, max_length=128)
+    password: str = Field(..., min_length=8, max_length=128)
     first_name: Optional[str] = Field(default=None, max_length=80)
     last_name: Optional[str] = Field(default=None, max_length=80)
     age: Optional[int] = Field(default=None, ge=0)
@@ -39,8 +39,13 @@ class UserRegister(BaseModel):
 
 class Token(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str = "bearer"
-    expires_in: int # seconds
+    expires_in: int  # seconds
+
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str = Field(..., min_length=20, max_length=256)
 
 
 class UserLogin(BaseModel):

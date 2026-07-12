@@ -1,6 +1,7 @@
 import os
 
 os.environ["LEDGR_DATABASE_URL"] = "sqlite://"
+os.environ["LEDGR_RATE_LIMIT_ENABLED"] = "false"
 
 from fastapi.testclient import TestClient
 from sqlalchemy.pool import StaticPool

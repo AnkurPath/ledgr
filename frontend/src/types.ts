@@ -4,6 +4,7 @@ export type ApiStatus = {
 
 export type TokenResponse = {
   access_token: string;
+  refresh_token: string;
   token_type: "bearer";
   expires_in: number;
 };
@@ -335,6 +336,7 @@ export type CurrentPrice = {
   symbol: string;
   market_symbol: string;
   current_price: string;
+  name?: string | null;
 };
 
 export type InvestmentOption = {

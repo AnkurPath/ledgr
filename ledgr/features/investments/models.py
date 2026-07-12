@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, Column, Date, DateTime, Integer, Numeric, UniqueConstraint, func
+from sqlalchemy import Boolean, Column, Date, DateTime, Index, Integer, Numeric, UniqueConstraint, func, text
 from sqlmodel import Field, SQLModel, String
 
 
@@ -47,7 +47,23 @@ class MutualFundDataModel(SQLModel, table=True):
 class MutualFundInvestmentModel(SQLModel, table=True):
     __tablename__ = "mutual_fund_investments"
     __table_args__ = (
-        UniqueConstraint("user_id", "scheme_code", name="uq_mutual_fund_investments_user_scheme_code"),
+        Index(
+            "uq_mutual_fund_investments_user_scheme_goal",
+            "user_id",
+            "scheme_code",
+            "goal_id",
+            unique=True,
+            postgresql_where=text("goal_id IS NOT NULL"),
+            sqlite_where=text("goal_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_mutual_fund_investments_user_scheme_no_goal",
+            "user_id",
+            "scheme_code",
+            unique=True,
+            postgresql_where=text("goal_id IS NULL"),
+            sqlite_where=text("goal_id IS NULL"),
+        ),
     )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True, index=True)
@@ -70,7 +86,23 @@ class MutualFundInvestmentModel(SQLModel, table=True):
 class StockInvestmentModel(SQLModel, table=True):
     __tablename__ = "stock_investments"
     __table_args__ = (
-        UniqueConstraint("user_id", "symbol", name="uq_stock_investments_user_symbol"),
+        Index(
+            "uq_stock_investments_user_symbol_goal",
+            "user_id",
+            "symbol",
+            "goal_id",
+            unique=True,
+            postgresql_where=text("goal_id IS NOT NULL"),
+            sqlite_where=text("goal_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_stock_investments_user_symbol_no_goal",
+            "user_id",
+            "symbol",
+            unique=True,
+            postgresql_where=text("goal_id IS NULL"),
+            sqlite_where=text("goal_id IS NULL"),
+        ),
     )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True, index=True)
@@ -96,7 +128,23 @@ class StockInvestmentModel(SQLModel, table=True):
 class InternationalInvestmentModel(SQLModel, table=True):
     __tablename__ = "international_investments"
     __table_args__ = (
-        UniqueConstraint("user_id", "symbol", name="uq_international_investments_user_symbol"),
+        Index(
+            "uq_international_investments_user_symbol_goal",
+            "user_id",
+            "symbol",
+            "goal_id",
+            unique=True,
+            postgresql_where=text("goal_id IS NOT NULL"),
+            sqlite_where=text("goal_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_international_investments_user_symbol_no_goal",
+            "user_id",
+            "symbol",
+            unique=True,
+            postgresql_where=text("goal_id IS NULL"),
+            sqlite_where=text("goal_id IS NULL"),
+        ),
     )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True, index=True)
@@ -107,7 +155,7 @@ class InternationalInvestmentModel(SQLModel, table=True):
     security_name: Optional[str] = Field(default=None, sa_column=Column(String(250), nullable=True, index=True))
     market: str = Field(default="US", sa_column=Column(String(25), nullable=False, index=True))
     instrument_type: str = Field(default="stock", sa_column=Column(String(25), nullable=False, index=True))
-    quantity: Decimal = Field(sa_column=Column(Numeric(14, 3), nullable=False, index=True))
+    quantity: Decimal = Field(sa_column=Column(Numeric(17, 6), nullable=False, index=True))
     avg_price: Decimal = Field(sa_column=Column(Numeric(14, 3), nullable=False, index=True))
     current_price: Decimal = Field(sa_column=Column(Numeric(14, 3), nullable=False, index=True))
     created_at: datetime = Field(

@@ -202,6 +202,7 @@ class CurrentPriceResponse(BaseModel):
     symbol: str
     market_symbol: str
     current_price: Decimal
+    name: Optional[str] = None
 
 
 class InvestmentOptionCreate(BaseModel):

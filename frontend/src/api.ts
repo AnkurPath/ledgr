@@ -40,11 +40,16 @@ import type {
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? "";
 
+export const accessTokenStorageKey = "ledgr_access_token";
+export const refreshTokenStorageKey = "ledgr_refresh_token";
+export const tokensRefreshedEvent = "ledgr:tokens-refreshed";
+
 type RequestOptions = {
   method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
   body?: unknown;
   formBody?: URLSearchParams;
   token?: string | null;
+  skipAuthRefresh?: boolean;
 };
 
 export class ApiError extends Error {
@@ -59,6 +64,47 @@ export class ApiError extends Error {
 
 function buildUrl(path: string) {
   return new URL(`${apiBaseUrl}${path}`, window.location.origin);
+}
+
+export function persistTokens(response: TokenResponse) {
+  localStorage.setItem(accessTokenStorageKey, response.access_token);
+  localStorage.setItem(refreshTokenStorageKey, response.refresh_token);
+  window.dispatchEvent(new CustomEvent(tokensRefreshedEvent, { detail: response.access_token }));
+}
+
+export function clearStoredTokens() {
+  localStorage.removeItem(accessTokenStorageKey);
+  localStorage.removeItem(refreshTokenStorageKey);
+}
+
+let refreshInFlight: Promise<TokenResponse | null> | null = null;
+
+async function refreshAccessToken(): Promise<TokenResponse | null> {
+  const refreshToken = localStorage.getItem(refreshTokenStorageKey);
+  if (!refreshToken) {
+    return null;
+  }
+
+  if (!refreshInFlight) {
+    refreshInFlight = request<TokenResponse>("/users/refresh", {
+      method: "POST",
+      body: { refresh_token: refreshToken },
+      skipAuthRefresh: true
+    })
+      .then((tokens) => {
+        persistTokens(tokens);
+        return tokens;
+      })
+      .catch(() => {
+        clearStoredTokens();
+        return null;
+      })
+      .finally(() => {
+        refreshInFlight = null;
+      });
+  }
+
+  return refreshInFlight;
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -84,6 +130,17 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     headers,
     body
   });
+
+  if (response.status === 401 && options.token && !options.skipAuthRefresh) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      return request<T>(path, {
+        ...options,
+        token: refreshed.access_token,
+        skipAuthRefresh: true
+      });
+    }
+  }
 
   if (!response.ok) {
     let message = response.statusText;
@@ -116,6 +173,18 @@ export const api = {
     formBody.set("password", body.password);
     return request<TokenResponse>("/users/token", { method: "POST", formBody });
   },
+  refresh: (refreshToken: string) =>
+    request<TokenResponse>("/users/refresh", {
+      method: "POST",
+      body: { refresh_token: refreshToken },
+      skipAuthRefresh: true
+    }),
+  logout: (refreshToken: string) =>
+    request<void>("/users/logout", {
+      method: "POST",
+      body: { refresh_token: refreshToken },
+      skipAuthRefresh: true
+    }),
   me: (token: string) => request<UserProfile>("/users/me", { token }),
   listAccounts: (token: string) => request<Account[]>("/users/setup/accounts", { token }),
   getNetWorth: (token: string, days = 30) =>

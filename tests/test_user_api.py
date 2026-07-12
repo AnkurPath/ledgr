@@ -1,6 +1,7 @@
 import os
 
 os.environ["LEDGR_DATABASE_URL"] = "sqlite://"
+os.environ["LEDGR_RATE_LIMIT_ENABLED"] = "false"
 
 from fastapi.testclient import TestClient
 from sqlalchemy.pool import StaticPool
@@ -64,6 +65,66 @@ def test_register_user_returns_token_and_profile() -> None:
     assert [account["current_balance"] for account in accounts.json()] == ["0.00", "0.00"]
 
 
+def test_login_and_refresh_token_rotation() -> None:
+    client = make_test_client()
+    register_response = client.post(
+        "/users/register",
+        json={
+            "email": "refresh@example.com",
+            "password": "pass1234",
+            "first_name": "Refresh",
+            "last_name": "User",
+        },
+    )
+    assert register_response.status_code == 201
+    register_body = register_response.json()
+    assert register_body["refresh_token"]
+    assert register_body["expires_in"] == 30 * 60
+
+    login_response = client.post(
+        "/users/token",
+        data={"username": "refresh@example.com", "password": "pass1234"},
+    )
+    assert login_response.status_code == 200
+    login_body = login_response.json()
+    old_refresh = login_body["refresh_token"]
+
+    refresh_response = client.post("/users/refresh", json={"refresh_token": old_refresh})
+    assert refresh_response.status_code == 200
+    refresh_body = refresh_response.json()
+    assert refresh_body["access_token"]
+    assert refresh_body["refresh_token"]
+    assert refresh_body["refresh_token"] != old_refresh
+
+    me = client.get("/users/me", headers=auth_headers(refresh_body["access_token"]))
+    assert me.status_code == 200
+    assert me.json()["email"] == "refresh@example.com"
+
+    reused = client.post("/users/refresh", json={"refresh_token": old_refresh})
+    assert reused.status_code == 401
+
+
+def test_logout_revokes_refresh_token() -> None:
+    client = make_test_client()
+    register_response = client.post(
+        "/users/register",
+        json={
+            "email": "logout@example.com",
+            "password": "pass1234",
+            "first_name": "Log",
+            "last_name": "Out",
+        },
+    )
+    assert register_response.status_code == 201
+    refresh_token = register_response.json()["refresh_token"]
+
+    logout_response = client.post("/users/logout", json={"refresh_token": refresh_token})
+    assert logout_response.status_code == 204
+
+    refresh_response = client.post("/users/refresh", json={"refresh_token": refresh_token})
+    assert refresh_response.status_code == 401
+
+
 def test_setup_resources_are_scoped_to_current_user() -> None:
     client = make_test_client()
     first_token = register_user(client, "first@example.com")
@@ -122,7 +183,7 @@ def test_account_model_supports_credit_card_fields() -> None:
     body = created.json()
     assert body["account_type"] == "credit card"
     assert body["current_balance"] == "2500.00"
-    assert body["card_number"] == "1234567812345678"
+    assert body["card_number"] == "************5678"
     assert body["credit_limit"] == "100000.00"
     assert body["billing_cycle_start"] == 1
     assert body["billing_cycle_end"] == 25
@@ -580,13 +641,28 @@ def test_net_worth_includes_investments_and_history() -> None:
     )
     assert stock.status_code == 201
 
+    international = client.post(
+        "/investments/international",
+        json={
+            "symbol": "AAPL",
+            "security_name": "Apple",
+            "instrument_type": "stock",
+            "quantity": "1.000000",
+            "avg_price": "150.000",
+            "current_price": "200.000",
+        },
+        headers=headers,
+    )
+    assert international.status_code == 201
+
     response = client.get("/users/net-worth?days=7", headers=headers)
     assert response.status_code == 200
     body = response.json()
     assert body["stocks_value"] == "120.00"
-    assert body["net_worth"] == "120.00"
+    assert body["international_value"] == "200.00"
+    assert body["net_worth"] == "320.00"
     assert len(body["history"]) == 7
-    assert body["history"][-1]["net_worth"] == "120.00"
+    assert body["history"][-1]["net_worth"] == "320.00"
 
 
 def test_goals_are_scoped_to_current_user() -> None:

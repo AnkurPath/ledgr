@@ -17,12 +17,17 @@ tolerations: []
 affinity: {}
 
 env:
-  LEDGR_JWT_SECRET_KEY: "replace-me"
+  LEDGR_ENV: "production"
   ALGORITHM: "HS256"
   ACCESS_TOKEN_EXPIRE_MINUTES: "30"
+  REFRESH_TOKEN_EXPIRE_DAYS: "30"
 
+# Sensitive values. Override these at install time (e.g. --set-string) or via an
+# existing secret. Do NOT commit real credentials here. With LEDGR_ENV=production
+# the app refuses to start unless LEDGR_JWT_SECRET_KEY and LEDGR_DATABASE_URL are set.
 secretEnv:
-  LEDGR_DATABASE_URL: "postgresql+psycopg://postgres:postgres@postgres:5432/ledgr"
+  LEDGR_JWT_SECRET_KEY: ""
+  LEDGR_DATABASE_URL: ""
 
 createSecret: true
 existingSecretName: ""

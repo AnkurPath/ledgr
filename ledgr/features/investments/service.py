@@ -1,6 +1,9 @@
 from decimal import Decimal, ROUND_HALF_UP
+import http.cookiejar
 import json
+import time
 from typing import Optional
+import urllib.error
 import urllib.parse
 import urllib.request
 from uuid import UUID
@@ -37,14 +40,35 @@ from ledgr.features.investments.schemas import (
 from ledgr.features.users.models import GoalModel
 
 THREE_DECIMAL_PLACES = Decimal("0.001")
+SIX_DECIMAL_PLACES = Decimal("0.000001")
 TWO_DECIMAL_PLACES = Decimal("0.01")
 HUNDRED = Decimal("100")
 ZERO = Decimal("0")
-YAHOO_QUOTE_URL = "https://query1.finance.yahoo.com/v7/finance/quote"
+YAHOO_HOSTS = ("query1.finance.yahoo.com", "query2.finance.yahoo.com")
+YAHOO_COOKIE_URL = "https://fc.yahoo.com"
+YAHOO_USER_AGENT = "Mozilla/5.0"
+YAHOO_RETRY_SECONDS = 1.5
+PRICE_CACHE_TTL_SECONDS = 90
+
+_yahoo_cookie_jar = http.cookiejar.CookieJar()
+_yahoo_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(_yahoo_cookie_jar))
+_yahoo_crumb: Optional[str] = None
+_price_cache: dict[str, tuple[float, Decimal, Optional[str]]] = {}
+
+
+class MarketDataUnavailable(ValueError):
+    """Raised when a quote cannot be resolved for a symbol."""
+
+
+class MarketDataRateLimited(MarketDataUnavailable):
+    """Raised when the upstream market data provider is rate limiting."""
+
+
 DEFAULT_STOCK_SECTORS = (
     "Financials",
     "IT",
     "Oil & Gas",
+    "Gold",
     "FMCG",
     "Automobiles",
     "Healthcare",
@@ -74,6 +98,7 @@ DEFAULT_MUTUAL_FUND_CATEGORIES = (
     "Small Cap",
     "Multi Cap",
     "Flexi Cap",
+    "Gold",
     "Index Fund",
     "Debt Fund",
     "Hybrid Fund",
@@ -85,6 +110,10 @@ DEFAULT_MUTUAL_FUND_CATEGORIES = (
 
 def quantize_three_places(value: Decimal) -> Decimal:
     return value.quantize(THREE_DECIMAL_PLACES, rounding=ROUND_HALF_UP)
+
+
+def quantize_six_places(value: Decimal) -> Decimal:
+    return value.quantize(SIX_DECIMAL_PLACES, rounding=ROUND_HALF_UP)
 
 
 def quantize_two_places(value: Decimal) -> Decimal:
@@ -224,31 +253,180 @@ def _resolve_market_symbol(*, symbol: str, exchange: Optional[str] = None, marke
     if market.upper() == "US":
         return raw_symbol
 
+    if raw_symbol.endswith((".NS", ".BO")):
+        return raw_symbol
+
     normalized_exchange = (exchange or "").strip().upper()
-    if normalized_exchange == "NSE" and not raw_symbol.endswith(".NS"):
-        return f"{raw_symbol}.NS"
-    if normalized_exchange == "BSE" and not raw_symbol.endswith(".BO"):
+    if normalized_exchange == "BSE":
         return f"{raw_symbol}.BO"
-    return raw_symbol
+    # Default Indian listings to NSE when exchange is omitted.
+    return f"{raw_symbol}.NS"
 
 
-def fetch_current_price(*, symbol: str, exchange: Optional[str] = None, market: str = "IN") -> tuple[str, Decimal]:
-    market_symbol = _resolve_market_symbol(symbol=symbol, exchange=exchange, market=market)
-    query = urllib.parse.urlencode({"symbols": market_symbol})
-    url = f"{YAHOO_QUOTE_URL}?{query}"
-    request = urllib.request.Request(url, headers={"User-Agent": "ledgr/0.1"})
-    with urllib.request.urlopen(request, timeout=10) as response:
-        payload = json.loads(response.read().decode("utf-8"))
+def _yahoo_request(url: str, *, retry_on_rate_limit: bool = True, use_session: bool = True) -> bytes:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": YAHOO_USER_AGENT,
+            "Accept": "application/json,text/plain,*/*",
+        },
+    )
+    open_url = _yahoo_opener.open if use_session else urllib.request.urlopen
+    try:
+        with open_url(request, timeout=10) as response:
+            return response.read()
+    except urllib.error.HTTPError as exc:
+        if retry_on_rate_limit and exc.code == 429:
+            time.sleep(YAHOO_RETRY_SECONDS)
+            with open_url(request, timeout=10) as response:
+                return response.read()
+        raise
 
+
+def _refresh_yahoo_auth(*, host: str = YAHOO_HOSTS[0]) -> str:
+    global _yahoo_crumb
+    try:
+        _yahoo_request(YAHOO_COOKIE_URL, retry_on_rate_limit=False)
+    except urllib.error.HTTPError:
+        # fc.yahoo.com often returns 404 while still setting the session cookie.
+        pass
+
+    crumb = _yahoo_request(f"https://{host}/v1/test/getcrumb", retry_on_rate_limit=False).decode("utf-8").strip()
+    if not crumb or "too many requests" in crumb.lower():
+        raise MarketDataRateLimited("Market data provider is rate limiting requests. Try again shortly.")
+    _yahoo_crumb = crumb
+    return crumb
+
+
+def _display_name_from_fields(*candidates: object) -> Optional[str]:
+    for candidate in candidates:
+        if isinstance(candidate, str):
+            cleaned = candidate.strip()
+            if cleaned:
+                return cleaned
+    return None
+
+
+def _price_and_name_from_quote_payload(payload: dict) -> tuple[Decimal, Optional[str]]:
     items = payload.get("quoteResponse", {}).get("result", [])
     if not items:
-        raise ValueError("Unable to fetch current price for symbol")
+        raise MarketDataUnavailable("Unable to fetch current price for symbol")
 
-    price_value = items[0].get("regularMarketPrice")
+    item = items[0]
+    price_value = item.get("regularMarketPrice")
     if price_value is None:
-        raise ValueError("Current market price unavailable for symbol")
+        raise MarketDataUnavailable("Current market price unavailable for symbol")
+    name = _display_name_from_fields(item.get("longName"), item.get("shortName"), item.get("displayName"))
+    return Decimal(str(price_value)), name
 
-    return market_symbol, quantize_three_places(Decimal(str(price_value)))
+
+def _price_and_name_from_chart_payload(payload: dict) -> tuple[Decimal, Optional[str]]:
+    chart = payload.get("chart") or {}
+    error = chart.get("error")
+    if error:
+        raise MarketDataUnavailable("Unable to fetch current price for symbol")
+
+    results = chart.get("result") or []
+    if not results:
+        raise MarketDataUnavailable("Unable to fetch current price for symbol")
+
+    meta = results[0].get("meta") or {}
+    price_value = meta.get("regularMarketPrice")
+    if price_value is None:
+        price_value = meta.get("previousClose")
+    if price_value is None:
+        raise MarketDataUnavailable("Current market price unavailable for symbol")
+    name = _display_name_from_fields(meta.get("longName"), meta.get("shortName"))
+    return Decimal(str(price_value)), name
+
+
+def _fetch_price_via_chart(market_symbol: str) -> tuple[Decimal, Optional[str]]:
+    encoded_symbol = urllib.parse.quote(market_symbol)
+    saw_rate_limit = False
+    last_error: Optional[BaseException] = None
+    for index, host in enumerate(YAHOO_HOSTS):
+        url = f"https://{host}/v8/finance/chart/{encoded_symbol}?interval=1d&range=5d"
+        try:
+            payload = json.loads(
+                _yahoo_request(
+                    url,
+                    retry_on_rate_limit=(index == 0),
+                    use_session=False,
+                ).decode("utf-8")
+            )
+            return _price_and_name_from_chart_payload(payload)
+        except urllib.error.HTTPError as exc:
+            last_error = exc
+            if exc.code == 429:
+                saw_rate_limit = True
+                continue
+            if exc.code in (401, 403, 404):
+                continue
+            raise
+        except (urllib.error.URLError, MarketDataUnavailable, json.JSONDecodeError) as exc:
+            last_error = exc
+            continue
+
+    if saw_rate_limit:
+        raise MarketDataRateLimited(
+            "Market data provider is rate limiting requests. Try again shortly."
+        ) from last_error
+    raise MarketDataUnavailable("Unable to fetch current price for symbol") from last_error
+
+
+def _fetch_price_via_quote(market_symbol: str) -> tuple[Decimal, Optional[str]]:
+    global _yahoo_crumb
+    host = YAHOO_HOSTS[0]
+    crumb = _yahoo_crumb or _refresh_yahoo_auth(host=host)
+    query = urllib.parse.urlencode({"symbols": market_symbol, "crumb": crumb})
+    url = f"https://{host}/v7/finance/quote?{query}"
+    try:
+        payload = json.loads(_yahoo_request(url, retry_on_rate_limit=False).decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        if exc.code == 429:
+            raise MarketDataRateLimited(
+                "Market data provider is rate limiting requests. Try again shortly."
+            ) from exc
+        if exc.code not in (401, 403):
+            raise
+        crumb = _refresh_yahoo_auth(host=host)
+        query = urllib.parse.urlencode({"symbols": market_symbol, "crumb": crumb})
+        url = f"https://{host}/v7/finance/quote?{query}"
+        payload = json.loads(_yahoo_request(url, retry_on_rate_limit=False).decode("utf-8"))
+    return _price_and_name_from_quote_payload(payload)
+
+
+def fetch_current_price(
+    *, symbol: str, exchange: Optional[str] = None, market: str = "IN"
+) -> tuple[str, Decimal, Optional[str]]:
+    market_symbol = _resolve_market_symbol(symbol=symbol, exchange=exchange, market=market)
+    cache_key = f"{market.upper()}:{market_symbol}"
+    cached = _price_cache.get(cache_key)
+    if cached is not None:
+        cached_at, cached_price, cached_name = cached
+        if time.time() - cached_at <= PRICE_CACHE_TTL_SECONDS:
+            return market_symbol, cached_price, cached_name
+
+    try:
+        # Chart endpoint usually works without a crumb and is less rate-limited.
+        try:
+            price_value, name = _fetch_price_via_chart(market_symbol)
+        except MarketDataRateLimited:
+            raise
+        except MarketDataUnavailable:
+            price_value, name = _fetch_price_via_quote(market_symbol)
+    except MarketDataRateLimited:
+        raise
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        if isinstance(exc, urllib.error.HTTPError) and exc.code == 429:
+            raise MarketDataRateLimited(
+                "Market data provider is rate limiting requests. Try again shortly."
+            ) from exc
+        raise MarketDataUnavailable("Unable to fetch current price for symbol") from exc
+
+    quantized = quantize_three_places(price_value)
+    _price_cache[cache_key] = (time.time(), quantized, name)
+    return market_symbol, quantized, name
 
 
 def upsert_mutual_fund_investment(
@@ -264,6 +442,7 @@ def upsert_mutual_fund_investment(
         select(MutualFundInvestmentModel).where(
             MutualFundInvestmentModel.user_id == user_id,
             MutualFundInvestmentModel.scheme_code == payload.scheme_code,
+            MutualFundInvestmentModel.goal_id == payload.goal_id,
         )
     ).first()
 
@@ -282,19 +461,15 @@ def upsert_mutual_fund_investment(
         recalculate_goal_current_amount(session=session, user_id=user_id, goal_id=investment.goal_id)
         return investment
 
-    previous_goal_id = existing.goal_id
     total_units = quantize_three_places(existing.units + units)
     total_cost = (existing.units * existing.avg_price) + (units * avg_price)
     existing.units = total_units
     existing.avg_price = quantize_three_places(total_cost / total_units)
-    existing.goal_id = payload.goal_id
     existing.category_option_id = payload.category_option_id
     session.add(existing)
     session.commit()
     session.refresh(existing)
     recalculate_goal_current_amount(session=session, user_id=user_id, goal_id=existing.goal_id)
-    if previous_goal_id is not None and previous_goal_id != existing.goal_id:
-        recalculate_goal_current_amount(session=session, user_id=user_id, goal_id=previous_goal_id)
     return existing
 
 
@@ -388,7 +563,9 @@ def upsert_stock_investment(
     company_name = payload.company_name.strip() if payload.company_name else None
     exchange = payload.exchange.strip().upper() if payload.exchange else None
     if payload.current_price is None:
-        _, current_price = fetch_current_price(symbol=symbol, exchange=exchange, market="IN")
+        _, current_price, fetched_name = fetch_current_price(symbol=symbol, exchange=exchange, market="IN")
+        if not company_name and fetched_name:
+            company_name = fetched_name
     else:
         current_price = quantize_three_places(payload.current_price)
 
@@ -396,6 +573,7 @@ def upsert_stock_investment(
         select(StockInvestmentModel).where(
             StockInvestmentModel.user_id == user_id,
             StockInvestmentModel.symbol == symbol,
+            StockInvestmentModel.goal_id == payload.goal_id,
         )
     ).first()
 
@@ -417,13 +595,11 @@ def upsert_stock_investment(
         recalculate_goal_current_amount(session=session, user_id=user_id, goal_id=investment.goal_id)
         return investment
 
-    previous_goal_id = existing.goal_id
     total_quantity = quantize_three_places(existing.quantity + quantity)
     total_cost = (existing.quantity * existing.avg_price) + (quantity * avg_price)
     existing.quantity = total_quantity
     existing.avg_price = quantize_three_places(total_cost / total_quantity)
     existing.current_price = current_price
-    existing.goal_id = payload.goal_id
     existing.sector_option_id = payload.sector_option_id
     if company_name:
         existing.company_name = company_name
@@ -434,8 +610,6 @@ def upsert_stock_investment(
     session.commit()
     session.refresh(existing)
     recalculate_goal_current_amount(session=session, user_id=user_id, goal_id=existing.goal_id)
-    if previous_goal_id is not None and previous_goal_id != existing.goal_id:
-        recalculate_goal_current_amount(session=session, user_id=user_id, goal_id=previous_goal_id)
     return existing
 
 
@@ -446,14 +620,16 @@ def upsert_international_investment(
     payload: InternationalInvestmentUpsertRequest,
 ) -> InternationalInvestmentModel:
     symbol = payload.symbol.strip().upper()
-    quantity = quantize_three_places(payload.quantity)
+    quantity = quantize_six_places(payload.quantity)
     avg_price = quantize_three_places(payload.avg_price)
     security_name = payload.security_name.strip() if payload.security_name else None
     market = payload.market.strip().upper() if payload.market else "US"
     instrument_type = payload.instrument_type.strip().lower() if payload.instrument_type else "stock"
 
     if payload.current_price is None:
-        _, current_price = fetch_current_price(symbol=symbol, market=market)
+        _, current_price, fetched_name = fetch_current_price(symbol=symbol, market=market)
+        if not security_name and fetched_name:
+            security_name = fetched_name
     else:
         current_price = quantize_three_places(payload.current_price)
 
@@ -461,6 +637,7 @@ def upsert_international_investment(
         select(InternationalInvestmentModel).where(
             InternationalInvestmentModel.user_id == user_id,
             InternationalInvestmentModel.symbol == symbol,
+            InternationalInvestmentModel.goal_id == payload.goal_id,
         )
     ).first()
 
@@ -483,13 +660,11 @@ def upsert_international_investment(
         recalculate_goal_current_amount(session=session, user_id=user_id, goal_id=investment.goal_id)
         return investment
 
-    previous_goal_id = existing.goal_id
-    total_quantity = quantize_three_places(existing.quantity + quantity)
+    total_quantity = quantize_six_places(existing.quantity + quantity)
     total_cost = (existing.quantity * existing.avg_price) + (quantity * avg_price)
     existing.quantity = total_quantity
     existing.avg_price = quantize_three_places(total_cost / total_quantity)
     existing.current_price = current_price
-    existing.goal_id = payload.goal_id
     existing.sector_option_id = payload.sector_option_id
     existing.market = market
     existing.instrument_type = instrument_type
@@ -500,8 +675,6 @@ def upsert_international_investment(
     session.commit()
     session.refresh(existing)
     recalculate_goal_current_amount(session=session, user_id=user_id, goal_id=existing.goal_id)
-    if previous_goal_id is not None and previous_goal_id != existing.goal_id:
-        recalculate_goal_current_amount(session=session, user_id=user_id, goal_id=previous_goal_id)
     return existing
 
 
@@ -712,7 +885,7 @@ def update_international_investment(
         raise LookupError("International investment not found")
 
     previous_goal_id = investment.goal_id
-    investment.quantity = quantize_three_places(payload.quantity)
+    investment.quantity = quantize_six_places(payload.quantity)
     investment.avg_price = quantize_three_places(payload.avg_price)
     if payload.current_price is not None:
         investment.current_price = quantize_three_places(payload.current_price)

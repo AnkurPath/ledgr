@@ -1,4 +1,13 @@
-from ledgr.features.users.models import AccountModel, BudgetModel, CategoryModel, GoalModel, TagModel, UserModel, NetWorthModel
+from ledgr.features.users.models import (
+    AccountModel,
+    BudgetModel,
+    CategoryModel,
+    GoalModel,
+    TagModel,
+    UserModel,
+    NetWorthModel,
+    RefreshTokenModel,
+)
 from ledgr.features.transactions.models import TransactionModel
 from ledgr.features.investments.models import (
     InvestmentOptionModel,
@@ -10,6 +19,7 @@ from ledgr.features.investments.models import (
 
 __all__ = [
     "UserModel",
+    "RefreshTokenModel",
     "AccountModel",
     "CategoryModel",
     "TagModel",

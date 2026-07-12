@@ -20,7 +20,8 @@ from ledgr.models import (UserModel,
                           MutualFundInvestmentModel,
                           StockInvestmentModel,
                           InternationalInvestmentModel,
-                          NetWorthModel
+                          NetWorthModel,
+                          RefreshTokenModel,
                           )
 
 # this is the Alembic Config object, which provides

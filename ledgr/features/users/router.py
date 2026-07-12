@@ -3,18 +3,30 @@ from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlmodel import Session, select
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
+from ledgr.core.config import settings
 from ledgr.core.db import get_session
-from ledgr.core.security import ACCESS_TOKEN_EXPIRE_MINUTES, create_access_token, get_password_hash, verify_password, get_current_user
+from ledgr.core.ratelimit import limiter
+from ledgr.core.security import (
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+    create_access_token,
+    create_refresh_token,
+    get_password_hash,
+    verify_password,
+    get_current_user,
+    revoke_refresh_token,
+    rotate_refresh_token,
+)
 from ledgr.features.users.models import AccountModel, BudgetModel, CategoryModel, GoalModel, TagModel, UserModel
 from ledgr.features.transactions.models import TransactionModel
 from ledgr.features.users.schemas import (
     Token,
+    RefreshTokenRequest,
     UserRegister,
     UserProfile,
     AccountCreate, AccountResponse, AccountTypeEnum, AccountUpdate,
@@ -33,8 +45,33 @@ router = APIRouter(prefix="/users", tags=["users"])
 DEFAULT_ACCOUNT_NAMES = ("Cash", "Pending from Friends")
 
 
+def mask_card_number(card_number: Optional[str]) -> Optional[str]:
+    """Store only the last four digits; never persist a full PAN."""
+    if not card_number:
+        return card_number
+    digits = card_number.strip()
+    if len(digits) <= 4:
+        return "*" * len(digits)
+    return "*" * (len(digits) - 4) + digits[-4:]
+
+
+def _issue_token_pair(*, session: Session, user: UserModel) -> Token:
+    access_token = create_access_token(
+        data={"sub": user.email},
+        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
+    )
+    refresh_token = create_refresh_token(session=session, user_id=user.id)
+    return Token(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        token_type="bearer",
+        expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
+
+
 @router.post("/register", response_model=Token, status_code=status.HTTP_201_CREATED)
-def register_user(payload: UserRegister, session: Session = Depends(get_session)) -> Token:
+@limiter.limit(settings.auth_rate_limit)
+def register_user(request: Request, payload: UserRegister, session: Session = Depends(get_session)) -> Token:
     hashed_password = get_password_hash(payload.password)
     user = UserModel(
         email=payload.email,
@@ -59,17 +96,15 @@ def register_user(payload: UserRegister, session: Session = Depends(get_session)
         session.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User with this email already exists")
     session.refresh(user)
-
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": user.email}, expires_delta=access_token_expires
-    )
-    return Token(access_token=access_token, token_type="bearer", expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60)
+    return _issue_token_pair(session=session, user=user)
 
 
 @router.post("/token", response_model=Token)
+@limiter.limit(settings.auth_rate_limit)
 def login_for_access_token(
-    form_data: OAuth2PasswordRequestForm = Depends(), session: Session = Depends(get_session)
+    request: Request,
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    session: Session = Depends(get_session),
 ) -> Token:
     user = session.exec(select(UserModel).where(UserModel.email == form_data.username)).first()
     if not user or not verify_password(form_data.password, user.hashed_password):
@@ -78,11 +113,39 @@ def login_for_access_token(
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    return _issue_token_pair(session=session, user=user)
+
+
+@router.post("/refresh", response_model=Token)
+@limiter.limit(settings.auth_rate_limit)
+def refresh_access_token(
+    request: Request,
+    payload: RefreshTokenRequest,
+    session: Session = Depends(get_session),
+) -> Token:
+    del request
+    user, refresh_token = rotate_refresh_token(session=session, raw_token=payload.refresh_token)
     access_token = create_access_token(
-        data={"sub": user.email}, expires_delta=access_token_expires
+        data={"sub": user.email},
+        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
     )
-    return Token(access_token=access_token, token_type="bearer", expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60)
+    return Token(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        token_type="bearer",
+        expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit(settings.auth_rate_limit)
+def logout_user(
+    request: Request,
+    payload: RefreshTokenRequest,
+    session: Session = Depends(get_session),
+) -> None:
+    del request
+    revoke_refresh_token(session=session, raw_token=payload.refresh_token)
 
 
 @router.get("/me", response_model=UserProfile)
@@ -123,7 +186,7 @@ def create_account(
         opening_balance=payload.opening_balance,
         current_balance=payload.opening_balance,
         currency=payload.currency,
-        card_number=payload.card_number,
+        card_number=mask_card_number(payload.card_number),
         expiration_date=payload.expiration_date,
         credit_limit=payload.credit_limit,
         billing_cycle_start=payload.billing_cycle_start,
@@ -153,6 +216,8 @@ def update_account(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
         
     values = payload.model_dump(exclude_unset=True)
+    if "card_number" in values:
+        values["card_number"] = mask_card_number(values["card_number"])
     next_account_type = values.get("account_type", account.account_type)
     credit_card_fields = payload.provided_credit_card_fields()
     if next_account_type != AccountTypeEnum.CREDIT_CARD and credit_card_fields:
