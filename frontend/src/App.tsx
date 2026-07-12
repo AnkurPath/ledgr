@@ -1040,7 +1040,7 @@ function DashboardShell({
         totals[tagName] += sign * amount;
       } else if (type === "INVESTMENT" || tagName === "Investments") {
         totals.Investments += amount;
-      } else if (type !== "INVESTMENT") {
+      } else {
         untagged += sign * amount;
       }
     }
