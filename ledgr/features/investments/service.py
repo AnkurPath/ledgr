@@ -76,6 +76,8 @@ DEFAULT_STOCK_SECTORS = (
     "Consumption",
     "Chemicals",
     "Reality",
+    "Index",
+    "International Fund",
     "Other",
 )
 DEFAULT_INTERNATIONAL_SECTORS = (

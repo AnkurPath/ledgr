@@ -941,6 +941,33 @@ select:focus {
   min-height: 260px;
 }
 
+.dashboard-main,
+.sidebar,
+.rail-stack-card .rail-section:first-child,
+.rail-stack-card .rail-section:last-child,
+.recent-transactions-panel .activity-list,
+.budget-overview-panel .budget-overview-list,
+.category-spend-panel .category-spend-list,
+.goal-scroll-list,
+.account-balance-list,
+.table-wrapper {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.dashboard-main::-webkit-scrollbar,
+.sidebar::-webkit-scrollbar,
+.rail-stack-card .rail-section:first-child::-webkit-scrollbar,
+.rail-stack-card .rail-section:last-child::-webkit-scrollbar,
+.recent-transactions-panel .activity-list::-webkit-scrollbar,
+.budget-overview-panel .budget-overview-list::-webkit-scrollbar,
+.category-spend-panel .category-spend-list::-webkit-scrollbar,
+.goal-scroll-list::-webkit-scrollbar,
+.account-balance-list::-webkit-scrollbar,
+.table-wrapper::-webkit-scrollbar {
+  display: none;
+}
+
 .dashboard-topbar {
   display: flex;
   align-items: center;
@@ -1251,6 +1278,14 @@ select:focus {
     "copy percent"
     "track track";
   gap: 6px 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: transparent;
+}
+
+.category-spend-row:hover,
+.category-spend-row:focus-visible {
+  background: var(--lavender-soft);
 }
 
 .category-spend-copy {
@@ -2039,33 +2074,53 @@ button.legend-row.interactive:focus-visible {
   justify-content: center;
 }
 
-.investment-allocation-donut {
-  width: 190px;
-  height: 190px;
-  border-radius: 999px;
+.allocation-donut-wrap {
+  position: relative;
   display: grid;
   place-items: center;
+  flex-shrink: 0;
 }
 
-.investment-allocation-center {
-  width: 124px;
-  height: 124px;
-  border-radius: 999px;
-  background: #fff;
+.allocation-donut-svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.allocation-donut-slice {
+  transition: opacity 180ms ease;
+}
+
+.allocation-donut-slice.dimmed {
+  opacity: 0.45;
+}
+
+.allocation-donut-slice.active {
+  filter: drop-shadow(0 4px 8px rgba(17, 17, 17, 0.16));
+}
+
+.allocation-donut-center {
+  position: absolute;
+  inset: 22%;
   display: grid;
   place-items: center;
   text-align: center;
   padding: 8px;
+  pointer-events: none;
 }
 
-.investment-allocation-center strong {
-  font-size: 1rem;
+.allocation-donut-center strong {
+  font-size: 0.92rem;
   color: var(--ink);
+  line-height: 1.15;
 }
 
-.investment-allocation-center span {
-  font-size: 0.74rem;
+.allocation-donut-center span {
+  font-size: 0.7rem;
   color: var(--muted);
+  line-height: 1.25;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .investment-allocation-legend {
@@ -2088,12 +2143,14 @@ button.legend-row.interactive:focus-visible {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
 .investment-allocation-dot {
   width: 10px;
   height: 10px;
   border-radius: 999px;
+  flex-shrink: 0;
 }
 
 .investment-allocation-values {
@@ -2103,73 +2160,102 @@ button.legend-row.interactive:focus-visible {
   color: var(--ink);
   font-size: 0.82rem;
   font-weight: 700;
+  flex-shrink: 0;
 }
 
-.investment-goal-allocation-card {
+.investment-goal-allocation-section {
   display: grid;
-  gap: 10px;
+  gap: 12px;
 }
 
-.investment-goal-allocation-list {
+.investment-goal-card-grid {
   display: grid;
-  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
 }
 
-.investment-goal-allocation-row {
+.investment-goal-card {
   display: grid;
-  gap: 6px;
-  padding: 10px 12px;
+  gap: 18px;
+  padding: 20px;
   border: 1px solid #e6e8f2;
-  border-radius: 12px;
+  border-radius: 16px;
   background: #fff;
+  min-width: 0;
 }
 
-.investment-goal-allocation-header {
+.investment-goal-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.investment-goal-card-header strong {
+  color: var(--ink);
+  font-size: 1rem;
+}
+
+.investment-goal-card-header span {
+  color: var(--ink);
+  font-size: 0.84rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.investment-goal-card-body {
+  display: grid;
+  grid-template-columns: 148px minmax(0, 1fr);
+  gap: 18px;
+  align-items: center;
+}
+
+.investment-goal-card-legend {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.investment-goal-card-legend-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 12px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 0.84rem;
+  color: var(--muted);
+  background: transparent;
 }
 
-.investment-goal-allocation-header strong {
+.investment-goal-card-legend-row:hover,
+.investment-goal-card-legend-row.active,
+.investment-goal-card-legend-row:focus-visible {
+  background: var(--lavender-soft);
   color: var(--ink);
-  font-size: 0.86rem;
 }
 
-.investment-goal-allocation-header span {
+.investment-allocation-row:hover,
+.investment-allocation-row.active,
+.investment-allocation-row:focus-visible {
+  border-color: color-mix(in srgb, var(--accent-blue) 35%, #e6e8f2);
+  background: color-mix(in srgb, var(--active-tint) 70%, white);
+}
+
+.investment-goal-card-legend-row strong {
   color: var(--ink);
   font-size: 0.8rem;
   font-weight: 700;
-}
-
-.investment-goal-allocation-bar {
-  display: flex;
-  width: 100%;
-  height: 10px;
-  border-radius: 999px;
-  overflow: hidden;
-  background: #e8ecf8;
-}
-
-.investment-goal-allocation-bar span {
-  height: 100%;
-}
-
-.investment-goal-allocation-breakdown {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px 10px;
-  font-size: 0.74rem;
-  color: var(--muted);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .investment-category-pills {
   position: sticky;
   top: 0;
   z-index: 2;
-  padding: 4px 0 8px;
-  background: linear-gradient(180deg, rgba(246, 243, 255, 0.96), rgba(246, 243, 255, 0.88));
-  backdrop-filter: blur(6px);
+  padding: 6px 0 10px;
+  background: transparent;
 }
 
 .table-edit-input {
@@ -2208,6 +2294,95 @@ button.legend-row.interactive:focus-visible {
   height: 100%;
   min-height: 0;
   align-self: stretch;
+}
+
+.networth-chart-interactive {
+  position: relative;
+  min-height: 0;
+  height: 100%;
+  cursor: crosshair;
+}
+
+.networth-hover-guide {
+  stroke: color-mix(in srgb, var(--accent-blue) 45%, transparent);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 4;
+  pointer-events: none;
+}
+
+.networth-point {
+  transition: r 120ms ease;
+  cursor: pointer;
+}
+
+.networth-point.active {
+  fill: var(--accent-blue);
+  stroke: #fff;
+  stroke-width: 2;
+}
+
+.chart-hover-value {
+  color: var(--ink);
+  font-size: 0.95rem;
+  font-weight: 800;
+}
+
+.chart-tooltip {
+  position: absolute;
+  z-index: 3;
+  display: grid;
+  gap: 2px;
+  min-width: 110px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(17, 17, 17, 0.9);
+  color: #fff;
+  box-shadow: 0 8px 24px rgba(17, 17, 17, 0.18);
+  pointer-events: none;
+  transform: translate(-50%, calc(-100% - 12px));
+}
+
+.chart-tooltip strong {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.chart-tooltip span {
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.interactive-chart-row {
+  cursor: pointer;
+  transition:
+    transform 140ms ease,
+    background-color 140ms ease,
+    opacity 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.interactive-chart-row:hover,
+.interactive-chart-row.active {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(123, 97, 255, 0.1);
+}
+
+.interactive-chart-row.dimmed {
+  opacity: 0.45;
+}
+
+button.investment-allocation-row,
+button.investment-goal-card-legend-row,
+button.analysis-breakdown-row,
+button.analysis-untagged-note,
+button.category-spend-row {
+  width: 100%;
+  border: 0;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: inherit;
 }
 
 .networth-line-label {
@@ -2920,6 +3095,15 @@ button.legend-row.interactive:focus-visible {
   grid-template-columns: 110px 1fr auto;
   gap: 10px;
   align-items: center;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: transparent;
+}
+
+.analysis-breakdown-row:hover,
+.analysis-breakdown-row.active,
+.analysis-breakdown-row:focus-visible {
+  background: var(--lavender-soft);
 }
 
 .analysis-breakdown-label {
@@ -2966,8 +3150,18 @@ button.legend-row.interactive:focus-visible {
 
 .analysis-untagged-note {
   margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
   color: var(--muted);
   font-size: 0.8rem;
+  background: transparent;
+}
+
+.analysis-untagged-note:hover,
+.analysis-untagged-note.active,
+.analysis-untagged-note:focus-visible {
+  background: var(--lavender-soft);
+  color: var(--ink);
 }
 
 .modal-header {
@@ -3078,6 +3272,10 @@ button.legend-row.interactive:focus-visible {
   .dashboard-shell,
   .dashboard-shell.sidebar-collapsed {
     grid-template-columns: 88px minmax(0, 1fr);
+  }
+
+  .investment-goal-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .dashboard-overview {
@@ -3257,6 +3455,15 @@ button.legend-row.interactive:focus-visible {
   .investment-allocation-visual {
     justify-content: flex-start;
   }
+
+  .investment-goal-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .investment-goal-card-body {
+    grid-template-columns: 148px minmax(0, 1fr);
+    justify-items: stretch;
+  }
 }
 
 @media (max-width: 760px) {
@@ -3266,6 +3473,15 @@ button.legend-row.interactive:focus-visible {
     height: auto;
     max-height: none;
     overflow: visible;
+  }
+
+  .investment-goal-card-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .investment-goal-card-body {
+    grid-template-columns: 1fr;
+    justify-items: start;
   }
 
   .dashboard-main,

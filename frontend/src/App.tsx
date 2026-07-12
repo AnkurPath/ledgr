@@ -91,6 +91,128 @@ function formatCurrency(value: number) {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" }).format(value);
 }
 
+type AllocationItem = { label: string; value: number; color: string };
+
+function polarToCartesian(cx: number, cy: number, radius: number, angleDeg: number) {
+  const radians = ((angleDeg - 90) * Math.PI) / 180;
+  return {
+    x: cx + radius * Math.cos(radians),
+    y: cy + radius * Math.sin(radians)
+  };
+}
+
+function describeDonutSlice(
+  cx: number,
+  cy: number,
+  outerRadius: number,
+  innerRadius: number,
+  startAngle: number,
+  endAngle: number
+) {
+  const sweep = Math.max(endAngle - startAngle, 0.001);
+  const largeArc = sweep > 180 ? 1 : 0;
+  const outerStart = polarToCartesian(cx, cy, outerRadius, endAngle);
+  const outerEnd = polarToCartesian(cx, cy, outerRadius, startAngle);
+  const innerStart = polarToCartesian(cx, cy, innerRadius, startAngle);
+  const innerEnd = polarToCartesian(cx, cy, innerRadius, endAngle);
+  return [
+    `M ${outerStart.x} ${outerStart.y}`,
+    `A ${outerRadius} ${outerRadius} 0 ${largeArc} 0 ${outerEnd.x} ${outerEnd.y}`,
+    `L ${innerStart.x} ${innerStart.y}`,
+    `A ${innerRadius} ${innerRadius} 0 ${largeArc} 1 ${innerEnd.x} ${innerEnd.y}`,
+    "Z"
+  ].join(" ");
+}
+
+function AllocationDonutChart({
+  items,
+  activeLabel,
+  onSelect,
+  size,
+  holeRatio = 0.62,
+  explodeDistance = 10,
+  centerValue,
+  centerLabel,
+  ariaLabel
+}: {
+  items: AllocationItem[];
+  activeLabel: string | null;
+  onSelect: (label: string) => void;
+  size: number;
+  holeRatio?: number;
+  explodeDistance?: number;
+  centerValue?: string;
+  centerLabel?: string;
+  ariaLabel: string;
+}) {
+  const total = items.reduce((sum, item) => sum + item.value, 0);
+  const cx = size / 2;
+  const cy = size / 2;
+  const outerRadius = size / 2 - explodeDistance - 2;
+  const innerRadius = outerRadius * holeRatio;
+  let cursor = 0;
+  const slices =
+    total <= 0
+      ? []
+      : items
+          .filter((item) => item.value > 0)
+          .map((item) => {
+            const sweep = Math.min((item.value / total) * 360, 359.999);
+            const startAngle = cursor;
+            const endAngle = cursor + sweep;
+            cursor += (item.value / total) * 360;
+            const midAngle = startAngle + sweep / 2;
+            const isActive = activeLabel === item.label;
+            const offset = isActive ? explodeDistance : 0;
+            const radians = ((midAngle - 90) * Math.PI) / 180;
+            return {
+              ...item,
+              startAngle,
+              endAngle,
+              path: describeDonutSlice(cx, cy, outerRadius, innerRadius, startAngle, endAngle),
+              transform: `translate(${Math.cos(radians) * offset} ${Math.sin(radians) * offset})`,
+              isActive
+            };
+          });
+
+  return (
+    <div className="allocation-donut-wrap" style={{ width: size, height: size }}>
+      <svg
+        className="allocation-donut-svg"
+        viewBox={`0 0 ${size} ${size}`}
+        role="img"
+        aria-label={ariaLabel}
+      >
+        {slices.length === 0 ? (
+          <circle cx={cx} cy={cy} r={outerRadius} fill="#eef2ff" />
+        ) : (
+          slices.map((slice) => (
+            <path
+              key={slice.label}
+              className={`allocation-donut-slice${slice.isActive ? " active" : ""}${activeLabel && !slice.isActive ? " dimmed" : ""}`}
+              d={slice.path}
+              fill={slice.color}
+              transform={slice.transform}
+              data-allocation-interactive="true"
+              onClick={() => onSelect(slice.label)}
+              style={{ cursor: "pointer" }}
+            >
+              <title>{`${slice.label}: ${((slice.value / total) * 100).toFixed(1)}%`}</title>
+            </path>
+          ))
+        )}
+        <circle cx={cx} cy={cy} r={innerRadius - 1} fill="#fff" />
+      </svg>
+      {(centerValue || centerLabel) && (
+        <div className="allocation-donut-center">
+          {centerValue ? <strong>{centerValue}</strong> : null}
+          {centerLabel ? <span>{centerLabel}</span> : null}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function formatSignedCurrency(value: number) {
   if (value > 0) {
     return `+${formatCurrency(value)}`;
@@ -681,6 +803,29 @@ function DashboardShell({
   const [usdInrRate, setUsdInrRate] = useState<number | null>(null);
   const [netWorthOverview, setNetWorthOverview] = useState<NetWorthOverview | null>(null);
   const [monthDonutFocus, setMonthDonutFocus] = useState<"income" | "expenses" | null>(null);
+  const [netWorthHoverIndex, setNetWorthHoverIndex] = useState<number | null>(null);
+  const [analysisDonutFocus, setAnalysisDonutFocus] = useState<AnalysisTagName | "untagged" | null>(null);
+  const [allocationFocus, setAllocationFocus] = useState<string | null>(null);
+  const [goalAllocationFocus, setGoalAllocationFocus] = useState<{ goalId: string; label: string } | null>(null);
+
+  useEffect(() => {
+    if (allocationFocus === null && goalAllocationFocus === null) {
+      return;
+    }
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+      if (target.closest("[data-allocation-interactive='true']")) {
+        return;
+      }
+      setAllocationFocus(null);
+      setGoalAllocationFocus(null);
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [allocationFocus, goalAllocationFocus]);
   const [investmentOptions, setInvestmentOptions] = useState<InvestmentOptionsCatalog>({
     stock_sectors: [],
     international_sectors: [],
@@ -895,9 +1040,10 @@ function DashboardShell({
   const investmentsValue = useMemo(() => {
     const mf = parseAmount(mutualFundPortfolio?.total_current_value ?? "0");
     const stocks = parseAmount(stockPortfolio?.total_current_value ?? "0");
-    const intl = parseAmount(internationalPortfolio?.total_current_value ?? "0");
+    const intlUsd = parseAmount(internationalPortfolio?.total_current_value ?? "0");
+    const intl = usdInrRate !== null ? intlUsd * usdInrRate : 0;
     return mf + stocks + intl;
-  }, [mutualFundPortfolio, stockPortfolio, internationalPortfolio]);
+  }, [mutualFundPortfolio, stockPortfolio, internationalPortfolio, usdInrRate]);
   const netWorth = useMemo(() => {
     if (netWorthOverview) {
       return parseAmount(netWorthOverview.net_worth);
@@ -1832,56 +1978,130 @@ function DashboardShell({
           <section className="chart-panel networth-panel" aria-label="Networth graph">
             <div className="chart-panel-header">
               <h2>Networth Graph</h2>
-            </div>
-            <svg
-              className="networth-line-chart"
-              viewBox={`0 0 ${lineW} ${lineH}`}
-              role="img"
-              aria-label="Net worth over time"
-              preserveAspectRatio="xMidYMid meet"
-            >
-              <defs>
-                <linearGradient id="networthArea" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="rgba(119, 138, 251, 0.28)" />
-                  <stop offset="100%" stopColor="rgba(119, 138, 251, 0)" />
-                </linearGradient>
-              </defs>
-              {areaPath && <path d={areaPath} fill="url(#networthArea)" />}
-              {linePath && (
-                <path d={linePath} fill="none" stroke="var(--accent-blue)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+              {netWorthHoverIndex !== null && lineCoords[netWorthHoverIndex] && (
+                <strong className="chart-hover-value">
+                  {formatCurrency(lineCoords[netWorthHoverIndex].point.value)}
+                </strong>
               )}
-              {lineCoords.map((coord) => {
-                const label = new Date(`${coord.point.date}T00:00:00`).toLocaleDateString(undefined, {
-                  day: "numeric",
-                  month: "short"
-                });
-                return (
-                  <g key={coord.point.date}>
-                    <circle cx={coord.x} cy={coord.y} r="4" fill="var(--accent-violet)" />
-                    <title>{`${label}: ${formatCurrency(coord.point.value)}`}</title>
-                  </g>
-                );
-              })}
-              {lineCoords
-                .filter((_, index) => index === 0 || index === lineCoords.length - 1 || index % Math.ceil(lineCoords.length / 4) === 0)
-                .map((coord) => {
+            </div>
+            <div
+              className="networth-chart-interactive"
+              onMouseLeave={() => setNetWorthHoverIndex(null)}
+            >
+              <svg
+                className="networth-line-chart"
+                viewBox={`0 0 ${lineW} ${lineH}`}
+                role="img"
+                aria-label="Net worth over time"
+                preserveAspectRatio="xMidYMid meet"
+                onMouseMove={(event) => {
+                  const bounds = event.currentTarget.getBoundingClientRect();
+                  if (bounds.width <= 0 || lineCoords.length === 0) {
+                    return;
+                  }
+                  const ratioX = (event.clientX - bounds.left) / bounds.width;
+                  const svgX = ratioX * lineW;
+                  let nearestIndex = 0;
+                  let nearestDistance = Number.POSITIVE_INFINITY;
+                  lineCoords.forEach((coord, index) => {
+                    const distance = Math.abs(coord.x - svgX);
+                    if (distance < nearestDistance) {
+                      nearestDistance = distance;
+                      nearestIndex = index;
+                    }
+                  });
+                  setNetWorthHoverIndex(nearestIndex);
+                }}
+              >
+                <defs>
+                  <linearGradient id="networthArea" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="rgba(119, 138, 251, 0.28)" />
+                    <stop offset="100%" stopColor="rgba(119, 138, 251, 0)" />
+                  </linearGradient>
+                </defs>
+                {areaPath && <path d={areaPath} fill="url(#networthArea)" />}
+                {linePath && (
+                  <path
+                    d={linePath}
+                    fill="none"
+                    stroke="var(--accent-blue)"
+                    strokeWidth="3"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                )}
+                {netWorthHoverIndex !== null && lineCoords[netWorthHoverIndex] && (
+                  <line
+                    className="networth-hover-guide"
+                    x1={lineCoords[netWorthHoverIndex].x}
+                    x2={lineCoords[netWorthHoverIndex].x}
+                    y1={linePad.top}
+                    y2={linePad.top + plotH}
+                  />
+                )}
+                {lineCoords.map((coord, index) => {
                   const label = new Date(`${coord.point.date}T00:00:00`).toLocaleDateString(undefined, {
                     day: "numeric",
                     month: "short"
                   });
+                  const isActive = netWorthHoverIndex === index;
                   return (
-                    <text
-                      key={`label-${coord.point.date}`}
-                      x={coord.x}
-                      y={lineH - 6}
-                      textAnchor="middle"
-                      className="networth-line-label"
-                    >
-                      {label}
-                    </text>
+                    <g key={coord.point.date}>
+                      <circle
+                        className={`networth-point${isActive ? " active" : ""}`}
+                        cx={coord.x}
+                        cy={coord.y}
+                        r={isActive ? 6 : 4}
+                        fill="var(--accent-violet)"
+                        onMouseEnter={() => setNetWorthHoverIndex(index)}
+                      />
+                      <title>{`${label}: ${formatCurrency(coord.point.value)}`}</title>
+                    </g>
                   );
                 })}
-            </svg>
+                {lineCoords
+                  .filter(
+                    (_, index) =>
+                      index === 0 ||
+                      index === lineCoords.length - 1 ||
+                      index % Math.ceil(lineCoords.length / 4) === 0
+                  )
+                  .map((coord) => {
+                    const label = new Date(`${coord.point.date}T00:00:00`).toLocaleDateString(undefined, {
+                      day: "numeric",
+                      month: "short"
+                    });
+                    return (
+                      <text
+                        key={`label-${coord.point.date}`}
+                        x={coord.x}
+                        y={lineH - 6}
+                        textAnchor="middle"
+                        className="networth-line-label"
+                      >
+                        {label}
+                      </text>
+                    );
+                  })}
+              </svg>
+              {netWorthHoverIndex !== null && lineCoords[netWorthHoverIndex] && (
+                <div
+                  className="chart-tooltip"
+                  style={{
+                    left: `${(lineCoords[netWorthHoverIndex].x / lineW) * 100}%`,
+                    top: `${(lineCoords[netWorthHoverIndex].y / lineH) * 100}%`
+                  }}
+                >
+                  <strong>
+                    {new Date(`${lineCoords[netWorthHoverIndex].point.date}T00:00:00`).toLocaleDateString(
+                      undefined,
+                      { day: "numeric", month: "short", year: "numeric" }
+                    )}
+                  </strong>
+                  <span>{formatCurrency(lineCoords[netWorthHoverIndex].point.value)}</span>
+                </div>
+              )}
+            </div>
           </section>
 
           <section className="chart-panel budget-overview-panel" aria-label="Budget overview">
@@ -1906,9 +2126,10 @@ function DashboardShell({
                   return (
                     <button
                       key={budget.id}
-                      className="budget-overview-row"
+                      className="budget-overview-row interactive-chart-row"
                       type="button"
                       onClick={() => onSelectSection("Budget")}
+                      title={`${budget.name}: ${formatCurrency(spentAmount)} of ${formatCurrency(budgetAmount)} (${usagePercent}%)`}
                     >
                       <div className="budget-overview-copy">
                         <strong>{budget.name}</strong>
@@ -1955,7 +2176,13 @@ function DashboardShell({
                       : 0;
                   const barPercent = Math.max(6, Math.round((row.amount / spendingByCategory.maxAmount) * 100));
                   return (
-                    <div key={row.id} className="category-spend-row">
+                    <button
+                      key={row.id}
+                      className="category-spend-row interactive-chart-row"
+                      type="button"
+                      onClick={() => onSelectSection("Transaction")}
+                      title={`${row.name}: ${formatCurrency(row.amount)} (${sharePercent}%)`}
+                    >
                       <div className="category-spend-copy">
                         <strong>{row.name}</strong>
                         <span>{formatCurrency(row.amount)}</span>
@@ -1971,7 +2198,7 @@ function DashboardShell({
                         <span className="category-spend-fill" style={{ width: `${barPercent}%` }} />
                       </div>
                       <span className="category-spend-percent">{sharePercent}%</span>
-                    </div>
+                    </button>
                   );
                 })
               )}
@@ -2176,12 +2403,27 @@ function DashboardShell({
     const needsShare = (spendingAnalysis.totals.Needs / analysisTotal) * 100;
     const wantsShare = (spendingAnalysis.totals.Wants / analysisTotal) * 100;
     const investmentsShare = (spendingAnalysis.totals.Investments / analysisTotal) * 100;
+    const untaggedShare = (spendingAnalysis.untagged / analysisTotal) * 100;
     const analysisDonut = `conic-gradient(
       ${ANALYSIS_TAG_COLORS.Needs} 0% ${needsShare}%,
       ${ANALYSIS_TAG_COLORS.Wants} ${needsShare}% ${needsShare + wantsShare}%,
       ${ANALYSIS_TAG_COLORS.Investments} ${needsShare + wantsShare}% ${needsShare + wantsShare + investmentsShare}%,
       #d7dde8 ${needsShare + wantsShare + investmentsShare}% 100%
     )`;
+    const analysisCenterValue =
+      analysisDonutFocus === "untagged"
+        ? spendingAnalysis.untagged
+        : analysisDonutFocus
+          ? spendingAnalysis.totals[analysisDonutFocus]
+          : spendingAnalysis.total;
+    const analysisCenterLabel =
+      analysisDonutFocus === "untagged"
+        ? "Untagged"
+        : analysisDonutFocus
+          ? analysisDonutFocus
+          : "Analyzed";
+    const analysisCenterPercent =
+      spendingAnalysis.total > 0 ? Math.round((analysisCenterValue / spendingAnalysis.total) * 100) : 0;
 
     return (
       <section className="workspace-panel">
@@ -2233,19 +2475,33 @@ function DashboardShell({
             )}
           </div>
 
-          <div className="transaction-analysis-chart">
+          <div
+            className="transaction-analysis-chart"
+            onMouseLeave={() => setAnalysisDonutFocus(null)}
+          >
             <div className="analysis-donut" style={{ background: analysisDonut }}>
               <div className="analysis-donut-center">
-                <strong>{formatCurrency(spendingAnalysis.total)}</strong>
-                <span>Analyzed</span>
+                <strong>{formatCurrency(analysisCenterValue)}</strong>
+                <span>
+                  {analysisCenterLabel}
+                  {analysisDonutFocus ? ` · ${analysisCenterPercent}%` : ""}
+                </span>
               </div>
             </div>
             <div className="analysis-breakdown">
               {ANALYSIS_TAG_NAMES.map((name) => {
                 const amount = spendingAnalysis.totals[name];
                 const percent = spendingAnalysis.total > 0 ? Math.round((amount / spendingAnalysis.total) * 100) : 0;
+                const isActive = analysisDonutFocus === name;
                 return (
-                  <article key={name} className="analysis-breakdown-row">
+                  <button
+                    key={name}
+                    type="button"
+                    className={`analysis-breakdown-row interactive-chart-row${isActive ? " active" : ""}${analysisDonutFocus && !isActive ? " dimmed" : ""}`}
+                    onMouseEnter={() => setAnalysisDonutFocus(name)}
+                    onFocus={() => setAnalysisDonutFocus(name)}
+                    onBlur={() => setAnalysisDonutFocus(null)}
+                  >
                     <div className="analysis-breakdown-label">
                       <span className="legend-dot" style={{ background: ANALYSIS_TAG_COLORS[name] }} />
                       <strong>{name}</strong>
@@ -2263,13 +2519,20 @@ function DashboardShell({
                       <span>{formatCurrency(amount)}</span>
                       <span>{percent}%</span>
                     </div>
-                  </article>
+                  </button>
                 );
               })}
               {spendingAnalysis.untagged > 0 && (
-                <p className="analysis-untagged-note">
+                <button
+                  type="button"
+                  className={`analysis-untagged-note interactive-chart-row${analysisDonutFocus === "untagged" ? " active" : ""}`}
+                  onMouseEnter={() => setAnalysisDonutFocus("untagged")}
+                  onFocus={() => setAnalysisDonutFocus("untagged")}
+                  onBlur={() => setAnalysisDonutFocus(null)}
+                >
                   Untagged spending: {formatCurrency(spendingAnalysis.untagged)}
-                </p>
+                  {untaggedShare > 0 ? ` (${Math.round(untaggedShare)}%)` : ""}
+                </button>
               )}
             </div>
           </div>
@@ -2869,6 +3132,9 @@ function DashboardShell({
       const stockGoldInr = stockHoldings
         .filter((holding) => (holding.sector_name ?? "").toLowerCase().includes("gold"))
         .reduce((sum, holding) => sum + parseAmount(holding.current_value), 0);
+      const stockInternationalInr = stockHoldings
+        .filter((holding) => (holding.sector_name ?? "").toLowerCase().includes("international"))
+        .reduce((sum, holding) => sum + parseAmount(holding.current_value), 0);
       const stockOtherInr = stockHoldings
         .filter((holding) => (holding.sector_name ?? "").toLowerCase().includes("other"))
         .reduce((sum, holding) => sum + parseAmount(holding.current_value), 0);
@@ -2878,14 +3144,14 @@ function DashboardShell({
       const othersValueInr = mutualFundOtherInr + stockOtherInr;
       const indianEquityInr =
         Math.max(0, mutualFundTotalInr - mutualFundGoldInr - mutualFundInternationalInr - mutualFundOtherInr) +
-        Math.max(0, stockTotalInr - stockGoldInr - stockOtherInr);
+        Math.max(0, stockTotalInr - stockGoldInr - stockInternationalInr - stockOtherInr);
 
       const allocationItems = [
         { label: "Indian Equity", value: indianEquityInr, color: INVESTMENT_ALLOCATION_COLORS.indianEquity },
         { label: "Gold", value: goldValueInr, color: INVESTMENT_ALLOCATION_COLORS.gold },
         {
           label: "International Investments",
-          value: internationalCurrentInr + mutualFundInternationalInr,
+          value: internationalCurrentInr + mutualFundInternationalInr + stockInternationalInr,
           color: INVESTMENT_ALLOCATION_COLORS.international
         },
         {
@@ -2895,18 +3161,11 @@ function DashboardShell({
         }
       ];
       const allocationTotal = allocationItems.reduce((sum, item) => sum + item.value, 0);
-      const allocationGradient =
-        allocationTotal <= 0
-          ? "#eef2ff"
-          : `conic-gradient(${allocationItems
-              .reduce<{ color: string; from: number; to: number }[]>((segments, item, index) => {
-                const from = index === 0 ? 0 : segments[index - 1].to;
-                const to = from + (item.value / allocationTotal) * 100;
-                segments.push({ color: item.color, from, to });
-                return segments;
-              }, [])
-              .map((segment) => `${segment.color} ${segment.from}% ${segment.to}%`)
-              .join(", ")})`;
+      const focusedAllocation = allocationItems.find((item) => item.label === allocationFocus) ?? null;
+      const allocationCenterValue = focusedAllocation?.value ?? allocationTotal;
+      const allocationCenterLabel = focusedAllocation
+        ? `${focusedAllocation.label} · ${allocationTotal > 0 ? ((focusedAllocation.value / allocationTotal) * 100).toFixed(1) : "0.0"}%`
+        : "Total value";
 
       type GoalAllocation = {
         goalId: string;
@@ -2981,9 +3240,12 @@ function DashboardShell({
         const value = parseAmount(holding.current_value);
         const sectorName = (holding.sector_name ?? "").toLowerCase();
         const isGold = sectorName.includes("gold");
+        const isInternational = sectorName.includes("international");
         const isOther = sectorName.includes("other");
         if (isGold) {
           bucket.gold += value;
+        } else if (isInternational) {
+          bucket.international += value;
         } else if (isOther) {
           bucket.others += value;
         } else {
@@ -3015,6 +3277,19 @@ function DashboardShell({
         .filter((entry) => entry.total > 0)
         .sort((left, right) => right.total - left.total);
 
+      const mfInvested = parseAmount(mutualFundPortfolio?.total_invested_amount ?? "0");
+      const mfCurrent = parseAmount(mutualFundPortfolio?.total_current_value ?? "0");
+      const stockInvested = parseAmount(stockPortfolio?.total_invested_amount ?? "0");
+      const stockCurrent = parseAmount(stockPortfolio?.total_current_value ?? "0");
+      const internationalInvestedUsd = parseAmount(internationalPortfolio?.total_invested_amount ?? "0");
+      const internationalInvestedInr =
+        usdInrRate !== null ? internationalInvestedUsd * usdInrRate : 0;
+      const overallInvested = mfInvested + stockInvested + internationalInvestedInr;
+      const overallCurrent = mfCurrent + stockCurrent + internationalCurrentInr;
+      const overallPnl = overallCurrent - overallInvested;
+      const overallPnlPercent = overallInvested > 0 ? (overallPnl / overallInvested) * 100 : 0;
+      const overallTone = pnlTone(overallPnl);
+
       return (
         <div className="investment-section-shell">
           {categoryPills}
@@ -3023,22 +3298,58 @@ function DashboardShell({
               <p className="eyebrow">Investment</p>
               <h2>Overview</h2>
             </div>
+            <section className="dashboard-grid investment-summary-grid" aria-label="Overall investment summary">
+              <article>
+                <p>Total invested</p>
+                <strong>{formatCurrency(overallInvested)}</strong>
+              </article>
+              <article>
+                <p>Current value</p>
+                <strong>{formatCurrency(overallCurrent)}</strong>
+              </article>
+              <article className={`pnl-summary pnl-summary--${overallTone}`}>
+                <p>Total P/L</p>
+                <strong className={pnlAmountClass(overallTone)}>
+                  {formatSignedCurrency(overallPnl)} ({formatPnlPercent(overallPnlPercent)})
+                </strong>
+              </article>
+            </section>
+            {usdInrRate === null && internationalCurrentUsd > 0 && (
+              <p className="form-hint">USD/INR rate unavailable. International totals are temporarily excluded.</p>
+            )}
             <section className="investment-overview-grid" aria-label="Investment asset allocation">
               <article className="investment-allocation-card">
-                <p className="investment-allocation-title">Asset allocation (INR)</p>
+                <p className="investment-allocation-title">Portfolio asset allocation (INR)</p>
                 <div className="investment-allocation-visual">
-                  <div className="investment-allocation-donut" style={{ background: allocationGradient }}>
-                    <div className="investment-allocation-center">
-                      <strong>{formatCurrency(allocationTotal)}</strong>
-                      <span>Total value</span>
-                    </div>
-                  </div>
+                  <AllocationDonutChart
+                    items={allocationItems}
+                    activeLabel={allocationFocus}
+                    onSelect={(label) => {
+                      setGoalAllocationFocus(null);
+                      setAllocationFocus((current) => (current === label ? null : label));
+                    }}
+                    size={220}
+                    explodeDistance={12}
+                    centerValue={formatCurrency(allocationCenterValue)}
+                    centerLabel={allocationCenterLabel}
+                    ariaLabel="Portfolio asset allocation"
+                  />
                 </div>
                 <div className="investment-allocation-legend">
                   {allocationItems.map((item) => {
                     const share = allocationTotal > 0 ? (item.value / allocationTotal) * 100 : 0;
+                    const isActive = allocationFocus === item.label;
                     return (
-                      <article key={item.label} className="investment-allocation-row">
+                      <button
+                        key={item.label}
+                        type="button"
+                        data-allocation-interactive="true"
+                        className={`investment-allocation-row interactive-chart-row${isActive ? " active" : ""}${allocationFocus && !isActive ? " dimmed" : ""}`}
+                        onClick={() => {
+                          setGoalAllocationFocus(null);
+                          setAllocationFocus((current) => (current === item.label ? null : item.label));
+                        }}
+                      >
                         <div className="investment-allocation-label">
                           <span className="investment-allocation-dot" style={{ backgroundColor: item.color }} />
                           <strong>{item.label}</strong>
@@ -3047,7 +3358,7 @@ function DashboardShell({
                           <span>{formatCurrency(item.value)}</span>
                           <span>{share.toFixed(1)}%</span>
                         </div>
-                      </article>
+                      </button>
                     );
                   })}
                 </div>
@@ -3055,53 +3366,109 @@ function DashboardShell({
                   <p className="form-hint">USD/INR rate unavailable. International slice is temporarily excluded.</p>
                 )}
               </article>
-              <article className="investment-goal-allocation-card">
+
+              <div className="investment-goal-allocation-section">
                 <p className="investment-allocation-title">Asset allocation by goal (INR)</p>
                 {goalAllocations.length === 0 ? (
                   <p className="form-hint">No goal-linked investments yet.</p>
                 ) : (
-                  <div className="investment-goal-allocation-list">
+                  <div className="investment-goal-card-grid">
                     {goalAllocations.map((goalAllocation) => {
-                      const indianShare = (goalAllocation.indianEquity / goalAllocation.total) * 100;
-                      const goldShare = (goalAllocation.gold / goalAllocation.total) * 100;
-                      const internationalShare = (goalAllocation.international / goalAllocation.total) * 100;
-                      const othersShare = (goalAllocation.others / goalAllocation.total) * 100;
+                      const goalItems = [
+                        {
+                          label: "Indian Equity",
+                          value: goalAllocation.indianEquity,
+                          color: INVESTMENT_ALLOCATION_COLORS.indianEquity
+                        },
+                        {
+                          label: "Gold",
+                          value: goalAllocation.gold,
+                          color: INVESTMENT_ALLOCATION_COLORS.gold
+                        },
+                        {
+                          label: "International",
+                          value: goalAllocation.international,
+                          color: INVESTMENT_ALLOCATION_COLORS.international
+                        },
+                        {
+                          label: "Others",
+                          value: goalAllocation.others,
+                          color: INVESTMENT_ALLOCATION_COLORS.others
+                        }
+                      ];
+                      const activeGoalLabel =
+                        goalAllocationFocus?.goalId === goalAllocation.goalId
+                          ? goalAllocationFocus.label
+                          : null;
+                      const focusedGoalItem = activeGoalLabel
+                        ? goalItems.find((item) => item.label === activeGoalLabel) ?? null
+                        : null;
                       return (
-                        <article key={goalAllocation.goalId} className="investment-goal-allocation-row">
-                          <div className="investment-goal-allocation-header">
+                        <article key={goalAllocation.goalId} className="investment-goal-card">
+                          <div className="investment-goal-card-header">
                             <strong>{goalAllocation.goalName}</strong>
-                            <span>{formatCurrency(goalAllocation.total)}</span>
+                            <span>
+                              {focusedGoalItem
+                                ? formatCurrency(focusedGoalItem.value)
+                                : formatCurrency(goalAllocation.total)}
+                            </span>
                           </div>
-                          <div className="investment-goal-allocation-bar" role="img" aria-label={`${goalAllocation.goalName} asset allocation`}>
-                            <span
-                              className="indian-equity"
-                              style={{ width: `${indianShare}%`, backgroundColor: INVESTMENT_ALLOCATION_COLORS.indianEquity }}
+                          <div className="investment-goal-card-body">
+                            <AllocationDonutChart
+                              items={goalItems}
+                              activeLabel={activeGoalLabel}
+                              onSelect={(label) => {
+                                setAllocationFocus(null);
+                                setGoalAllocationFocus((current) =>
+                                  current?.goalId === goalAllocation.goalId && current.label === label
+                                    ? null
+                                    : { goalId: goalAllocation.goalId, label }
+                                );
+                              }}
+                              size={148}
+                              explodeDistance={10}
+                              ariaLabel={`${goalAllocation.goalName} asset allocation`}
                             />
-                            <span
-                              className="gold"
-                              style={{ width: `${goldShare}%`, backgroundColor: INVESTMENT_ALLOCATION_COLORS.gold }}
-                            />
-                            <span
-                              className="international"
-                              style={{ width: `${internationalShare}%`, backgroundColor: INVESTMENT_ALLOCATION_COLORS.international }}
-                            />
-                            <span
-                              className="others"
-                              style={{ width: `${othersShare}%`, backgroundColor: INVESTMENT_ALLOCATION_COLORS.others }}
-                            />
-                          </div>
-                          <div className="investment-goal-allocation-breakdown">
-                            <span>Equity: {indianShare.toFixed(1)}%</span>
-                            <span>Gold: {goldShare.toFixed(1)}%</span>
-                            <span>International: {internationalShare.toFixed(1)}%</span>
-                            <span>Others: {othersShare.toFixed(1)}%</span>
+                            <div className="investment-goal-card-legend">
+                              {goalItems.map((item) => {
+                                const share =
+                                  goalAllocation.total > 0 ? (item.value / goalAllocation.total) * 100 : 0;
+                                const isActive = activeGoalLabel === item.label;
+                                return (
+                                  <button
+                                    key={item.label}
+                                    type="button"
+                                    data-allocation-interactive="true"
+                                    className={`investment-goal-card-legend-row interactive-chart-row${isActive ? " active" : ""}${activeGoalLabel && !isActive ? " dimmed" : ""}`}
+                                    onClick={() => {
+                                      setAllocationFocus(null);
+                                      setGoalAllocationFocus((current) =>
+                                        current?.goalId === goalAllocation.goalId &&
+                                        current.label === item.label
+                                          ? null
+                                          : { goalId: goalAllocation.goalId, label: item.label }
+                                      );
+                                    }}
+                                  >
+                                    <div className="investment-allocation-label">
+                                      <span
+                                        className="investment-allocation-dot"
+                                        style={{ backgroundColor: item.color }}
+                                      />
+                                      <span>{item.label}</span>
+                                    </div>
+                                    <strong>{share.toFixed(1)}%</strong>
+                                  </button>
+                                );
+                              })}
+                            </div>
                           </div>
                         </article>
                       );
                     })}
                   </div>
                 )}
-              </article>
+              </div>
             </section>
           </section>
         </div>
@@ -3749,9 +4116,13 @@ function DashboardShell({
                 <p>Current value (INR)</p>
                 <strong>{totalCurrentInInr === null ? "N/A" : formatCurrency(totalCurrentInInr)}</strong>
               </article>
-              <article>
+              <article className={`pnl-summary pnl-summary--${totalTone}`}>
                 <p>Total P/L (INR)</p>
-                <strong>{totalPnlInInr === null ? "N/A" : formatSignedCurrency(totalPnlInInr)}</strong>
+                <strong className={pnlAmountClass(totalTone)}>
+                  {totalPnlInInr === null
+                    ? "N/A"
+                    : `${formatSignedCurrency(totalPnlInInr)} (${formatPnlPercent(totalPnlPercent)})`}
+                </strong>
               </article>
             </section>
 

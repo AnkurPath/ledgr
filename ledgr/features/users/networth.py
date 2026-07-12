@@ -6,15 +6,16 @@ from uuid import UUID
 
 from sqlmodel import Session, select
 
+from ledgr.features.investments import service as investment_service
 from ledgr.features.investments.service import (
-    list_international_portfolio,
-    list_mutual_fund_portfolio,
-    list_stock_portfolio,
+    MarketDataRateLimited,
+    MarketDataUnavailable,
 )
 from ledgr.features.users.models import AccountModel, NetWorthModel
 
 TWO_PLACES = Decimal("0.01")
 ZERO = Decimal("0.00")
+USD_INR_SYMBOL = "INR=X"
 
 
 def _quantize(value: Decimal) -> Decimal:
@@ -25,13 +26,35 @@ def _day_start(day: date) -> datetime:
     return datetime(day.year, day.month, day.day)
 
 
+def _usd_inr_rate() -> Decimal | None:
+    try:
+        _, rate, _ = investment_service.fetch_current_price(symbol=USD_INR_SYMBOL, market="US")
+    except (MarketDataUnavailable, MarketDataRateLimited):
+        return None
+    if rate <= ZERO:
+        return None
+    return rate
+
+
 def compute_net_worth(*, session: Session, user_id: UUID) -> dict[str, Decimal]:
     accounts = session.exec(select(AccountModel).where(AccountModel.user_id == user_id)).all()
     accounts_value = _quantize(sum((account.current_balance for account in accounts), ZERO))
 
-    mutual_funds_value = list_mutual_fund_portfolio(session=session, user_id=user_id).total_current_value
-    stocks_value = list_stock_portfolio(session=session, user_id=user_id).total_current_value
-    international_value = list_international_portfolio(session=session, user_id=user_id).total_current_value
+    mutual_funds_value = investment_service.list_mutual_fund_portfolio(
+        session=session, user_id=user_id
+    ).total_current_value
+    stocks_value = investment_service.list_stock_portfolio(
+        session=session, user_id=user_id
+    ).total_current_value
+    international_value_usd = investment_service.list_international_portfolio(
+        session=session, user_id=user_id
+    ).total_current_value
+
+    # International holdings are priced in USD; convert to INR before summing.
+    usd_inr_rate = _usd_inr_rate()
+    international_value = (
+        _quantize(international_value_usd * usd_inr_rate) if usd_inr_rate is not None else ZERO
+    )
 
     net_worth = _quantize(accounts_value + mutual_funds_value + stocks_value + international_value)
     return {

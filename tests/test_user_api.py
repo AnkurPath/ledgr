@@ -624,6 +624,10 @@ def test_update_goal_amount_and_target_date() -> None:
 
 
 def test_net_worth_includes_investments_and_history() -> None:
+    from decimal import Decimal
+
+    from ledgr.features.investments import service as investment_service
+
     client = make_test_client()
     token = register_user(client, email="networth@example.com")
     headers = auth_headers(token)
@@ -655,14 +659,28 @@ def test_net_worth_includes_investments_and_history() -> None:
     )
     assert international.status_code == 201
 
-    response = client.get("/users/net-worth?days=7", headers=headers)
+    original_fetch = investment_service.fetch_current_price
+
+    def fake_fetch_current_price(*, symbol: str, exchange=None, market: str = "IN"):
+        del exchange
+        del market
+        if symbol.upper() == "INR=X":
+            return symbol, Decimal("85.000"), "USD/INR"
+        return symbol, Decimal("1.000"), None
+
+    investment_service.fetch_current_price = fake_fetch_current_price
+    try:
+        response = client.get("/users/net-worth?days=7", headers=headers)
+    finally:
+        investment_service.fetch_current_price = original_fetch
+
     assert response.status_code == 200
     body = response.json()
     assert body["stocks_value"] == "120.00"
-    assert body["international_value"] == "200.00"
-    assert body["net_worth"] == "320.00"
+    assert body["international_value"] == "17000.00"
+    assert body["net_worth"] == "17120.00"
     assert len(body["history"]) == 7
-    assert body["history"][-1]["net_worth"] == "320.00"
+    assert body["history"][-1]["net_worth"] == "17120.00"
 
 
 def test_goals_are_scoped_to_current_user() -> None:
