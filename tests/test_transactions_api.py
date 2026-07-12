@@ -365,6 +365,43 @@ def test_refund_transaction_credits_balance() -> None:
     assert balances["Refund Wallet"] == "145.00"
 
 
+def test_refund_can_use_expense_category_and_needs_tag() -> None:
+    client = make_test_client()
+    token = register_user(client)
+    headers = auth_headers(token)
+    account = create_account(client, token, opening_balance="100.00", name="Refund Wallet")
+    expense_category = create_category(client, token, "expense", "Food & Drinks")
+    tag = client.post(
+        "/users/setup/tags",
+        json={"name": "Needs", "color": "#FF6347"},
+        headers=headers,
+    )
+    assert tag.status_code == 201
+
+    response = client.post(
+        "/transactions",
+        json={
+            "date": "2026-06-28T10:00:00+00:00",
+            "amount": "25.00",
+            "account_id": account["id"],
+            "transaction_type": "REFUND",
+            "category_id": expense_category["id"],
+            "tag_id": tag.json()["id"],
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    created = response.json()["transactions"][0]
+    assert created["transaction_type"] == "REFUND"
+    assert created["category_id"] == expense_category["id"]
+    assert created["tag_id"] == tag.json()["id"]
+
+    accounts = client.get("/users/setup/accounts", headers=headers).json()
+    balances = {item["name"]: item["current_balance"] for item in accounts}
+    assert balances["Refund Wallet"] == "125.00"
+
+
 def test_single_account_transfer_rejects_insufficient_funds() -> None:
     client = make_test_client()
     token = register_user(client)

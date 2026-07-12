@@ -964,6 +964,10 @@ function DashboardShell({
     };
     return kindMap[editingTransactionForm.transactionType];
   }, [editingTransactionForm.transactionType]);
+  const refundCategoryOptions = useMemo(
+    () => [...categoriesByKind.expense, ...categoriesByKind.refund],
+    [categoriesByKind.expense, categoriesByKind.refund]
+  );
   const transferUsesSourceDestination = Boolean(
     transferCategory && ["A/C Transfer", "Cash Withdrawal", "Business"].includes(transferCategory.name)
   );
@@ -995,6 +999,10 @@ function DashboardShell({
       };
     }).filter((item) => item.id);
   }, [tags]);
+  const expenseAnalysisTags = useMemo(
+    () => analysisTags.filter((tag) => tag.name === "Needs" || tag.name === "Wants"),
+    [analysisTags]
+  );
   const analysisTagById = useMemo(() => {
     const map: Record<string, AnalysisTagName> = {};
     for (const tag of analysisTags) {
@@ -1021,19 +1029,25 @@ function DashboardShell({
     };
     let untagged = 0;
     for (const transaction of filteredTransactions) {
-      if (transaction.transaction_type !== "EXPENSE" && transaction.transaction_type !== "INVESTMENT") {
+      const type = transaction.transaction_type;
+      if (type !== "EXPENSE" && type !== "INVESTMENT" && type !== "REFUND") {
         continue;
       }
       const amount = Math.abs(parseAmount(transaction.amount));
+      const sign = type === "REFUND" ? -1 : 1;
       const tagName = transaction.tag_id ? analysisTagById[String(transaction.tag_id)] : undefined;
-      if (tagName) {
-        totals[tagName] += amount;
-      } else if (transaction.transaction_type === "INVESTMENT") {
+      if (tagName === "Needs" || tagName === "Wants") {
+        totals[tagName] += sign * amount;
+      } else if (type === "INVESTMENT" || tagName === "Investments") {
         totals.Investments += amount;
-      } else {
-        untagged += amount;
+      } else if (type !== "INVESTMENT") {
+        untagged += sign * amount;
       }
     }
+    for (const name of ANALYSIS_TAG_NAMES) {
+      totals[name] = Math.max(0, totals[name]);
+    }
+    untagged = Math.max(0, untagged);
     const taggedTotal = totals.Needs + totals.Wants + totals.Investments;
     return { totals, taggedTotal, untagged, total: taggedTotal + untagged };
   }, [filteredTransactions, analysisTagById]);
@@ -1061,52 +1075,63 @@ function DashboardShell({
   }, [netWorthOverview, netWorth]);
   const monthlySpend = useMemo(() => {
     const now = new Date();
-    return transactions
-      .filter((transaction) => {
-        const date = new Date(transaction.date);
-        return (
-          transaction.transaction_type === "EXPENSE" &&
-          date.getUTCFullYear() === now.getUTCFullYear() &&
-          date.getUTCMonth() === now.getUTCMonth()
-        );
-      })
-      .reduce((total, transaction) => total + parseAmount(transaction.amount), 0);
+    const net = transactions.reduce((total, transaction) => {
+      const date = new Date(transaction.date);
+      if (date.getUTCFullYear() !== now.getUTCFullYear() || date.getUTCMonth() !== now.getUTCMonth()) {
+        return total;
+      }
+      const amount = Math.abs(parseAmount(transaction.amount));
+      if (transaction.transaction_type === "EXPENSE") {
+        return total + amount;
+      }
+      if (transaction.transaction_type === "REFUND") {
+        return total - amount;
+      }
+      return total;
+    }, 0);
+    return Math.max(0, net);
   }, [transactions]);
   const spendingByCategory = useMemo(() => {
     const now = new Date();
     const categoryNameById = Object.fromEntries(
-      categoriesByKind.expense.map((category) => [String(category.id), category.name])
+      [...categoriesByKind.expense, ...categoriesByKind.refund].map((category) => [
+        String(category.id),
+        category.name
+      ])
     );
     const totals = new Map<string, number>();
     for (const transaction of transactions) {
-      if (transaction.transaction_type !== "EXPENSE") {
-        continue;
-      }
       const date = new Date(transaction.date);
       if (date.getUTCFullYear() !== now.getUTCFullYear() || date.getUTCMonth() !== now.getUTCMonth()) {
         continue;
       }
+      const amount = Math.abs(parseAmount(transaction.amount));
       const key = transaction.category_id ? String(transaction.category_id) : "uncategorized";
-      totals.set(key, (totals.get(key) ?? 0) + Math.abs(parseAmount(transaction.amount)));
+      if (transaction.transaction_type === "EXPENSE") {
+        totals.set(key, (totals.get(key) ?? 0) + amount);
+      } else if (transaction.transaction_type === "REFUND") {
+        totals.set(key, (totals.get(key) ?? 0) - amount);
+      }
     }
     const rows = Array.from(totals.entries())
       .map(([id, amount]) => ({
         id,
         name: id === "uncategorized" ? "Uncategorized" : categoryNameById[id] ?? "Category",
-        amount
+        amount: Math.max(0, amount)
       }))
+      .filter((row) => row.amount > 0)
       .sort((left, right) => right.amount - left.amount);
     const maxAmount = Math.max(...rows.map((row) => row.amount), 1);
     const totalAmount = rows.reduce((sum, row) => sum + row.amount, 0);
     return { rows: rows.slice(0, 6), maxAmount, totalAmount };
-  }, [transactions, categoriesByKind.expense]);
+  }, [transactions, categoriesByKind.expense, categoriesByKind.refund]);
   const monthlyIncome = useMemo(() => {
     const now = new Date();
     return transactions
       .filter((transaction) => {
         const date = new Date(transaction.date);
         return (
-          (transaction.transaction_type === "INCOME" || transaction.transaction_type === "REFUND") &&
+          transaction.transaction_type === "INCOME" &&
           date.getUTCFullYear() === now.getUTCFullYear() &&
           date.getUTCMonth() === now.getUTCMonth()
         );
@@ -1343,7 +1368,11 @@ function DashboardShell({
       payload.category_id = transactionForm.categoryId ? Number(transactionForm.categoryId) : null;
     }
 
-    if (transactionForm.transactionType === "EXPENSE" || transactionForm.transactionType === "INVESTMENT") {
+    if (
+      transactionForm.transactionType === "EXPENSE" ||
+      transactionForm.transactionType === "INVESTMENT" ||
+      transactionForm.transactionType === "REFUND"
+    ) {
       payload.tag_id = transactionForm.tagId || null;
     }
 
@@ -1796,7 +1825,8 @@ function DashboardShell({
         category_id: editingTransactionForm.categoryId ? Number(editingTransactionForm.categoryId) : null,
         tag_id:
           editingTransactionForm.transactionType === "EXPENSE" ||
-          editingTransactionForm.transactionType === "INVESTMENT"
+          editingTransactionForm.transactionType === "INVESTMENT" ||
+          editingTransactionForm.transactionType === "REFUND"
             ? editingTransactionForm.tagId || null
             : null,
         notes: editingTransactionForm.notes || null
@@ -2298,7 +2328,10 @@ function DashboardShell({
                 onChange={(event) => setTransactionForm({ ...transactionForm, categoryId: event.target.value })}
               >
                 <option value="">Select category</option>
-                {categoriesByKind[transactionCategoryKind].map((category) => (
+                {(transactionForm.transactionType === "REFUND"
+                  ? refundCategoryOptions
+                  : categoriesByKind[transactionCategoryKind]
+                ).map((category) => (
                   <option key={category.id} value={category.id}>
                     {category.name}
                   </option>
@@ -2306,12 +2339,16 @@ function DashboardShell({
               </select>
             </label>
           )}
-          {(transactionForm.transactionType === "EXPENSE" || transactionForm.transactionType === "INVESTMENT") && (
+          {(transactionForm.transactionType === "EXPENSE" || transactionForm.transactionType === "REFUND") && (
             <fieldset className="analysis-tag-fieldset">
               <legend>Spending analysis</legend>
-              <p className="form-hint">Classify this as a need, want, or investment for detailed breakdowns.</p>
+              <p className="form-hint">
+                {transactionForm.transactionType === "REFUND"
+                  ? "Tag the refund as a need or want so it reduces that spending bucket."
+                  : "Classify this expense as a need or want. Investments use the Investment transaction type."}
+              </p>
               <div className="analysis-tag-options" role="radiogroup" aria-label="Spending analysis">
-                {analysisTags.map((tag) => (
+                {expenseAnalysisTags.map((tag) => (
                   <label
                     key={tag.id}
                     className={`analysis-tag-option ${transactionForm.tagId === tag.id ? "selected" : ""}`}
@@ -2552,7 +2589,11 @@ function DashboardShell({
                     tagId:
                       event.target.value === "INVESTMENT"
                         ? analysisTags.find((tag) => tag.name === "Investments")?.id ?? ""
-                        : editingTransactionForm.tagId
+                        : event.target.value === "EXPENSE" || event.target.value === "REFUND"
+                          ? expenseAnalysisTags.some((tag) => tag.id === editingTransactionForm.tagId)
+                            ? editingTransactionForm.tagId
+                            : ""
+                          : ""
                   })
                 }
               >
@@ -2613,7 +2654,10 @@ function DashboardShell({
                 onChange={(event) => setEditingTransactionForm({ ...editingTransactionForm, categoryId: event.target.value })}
               >
                 <option value="">Select category</option>
-                {categoriesByKind[editingCategoryKind].map((category) => (
+                {(editingTransactionForm.transactionType === "REFUND"
+                  ? refundCategoryOptions
+                  : categoriesByKind[editingCategoryKind]
+                ).map((category) => (
                   <option key={category.id} value={category.id}>
                     {category.name}
                   </option>
@@ -2621,11 +2665,16 @@ function DashboardShell({
               </select>
             </label>
             {(editingTransactionForm.transactionType === "EXPENSE" ||
-              editingTransactionForm.transactionType === "INVESTMENT") && (
+              editingTransactionForm.transactionType === "REFUND") && (
               <fieldset className="analysis-tag-fieldset">
                 <legend>Spending analysis</legend>
+                <p className="form-hint">
+                  {editingTransactionForm.transactionType === "REFUND"
+                    ? "Tag the refund as a need or want so it reduces that spending bucket."
+                    : "Classify this expense as a need or want. Investments use the Investment transaction type."}
+                </p>
                 <div className="analysis-tag-options" role="radiogroup" aria-label="Spending analysis">
-                  {analysisTags.map((tag) => (
+                  {expenseAnalysisTags.map((tag) => (
                     <label
                       key={tag.id}
                       className={`analysis-tag-option ${editingTransactionForm.tagId === tag.id ? "selected" : ""}`}

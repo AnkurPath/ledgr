@@ -73,6 +73,13 @@ def should_move_between_accounts(category: Optional[CategoryModel]) -> bool:
 def validate_category_kind(category: Optional[CategoryModel], transaction_type: TransactionTypeEnum) -> None:
     if category is None:
         return
+    if transaction_type == TransactionTypeEnum.REFUND:
+        if category.kind not in {"refund", "expense"}:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Selected category kind must be 'expense' or 'refund' for REFUND transactions",
+            )
+        return
     expected_kind = TRANSACTION_KIND_MAP[transaction_type]
     if category.kind != expected_kind:
         raise HTTPException(
