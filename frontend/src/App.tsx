@@ -910,7 +910,8 @@ function DashboardShell({
   const [holdingEditForm, setHoldingEditForm] = useState({
     unitsOrQuantity: "",
     avgPrice: "",
-    optionId: ""
+    optionId: "",
+    goalId: ""
   });
   const [savingHoldingEdit, setSavingHoldingEdit] = useState(false);
   const [budgetForm, setBudgetForm] = useState({
@@ -1756,9 +1757,15 @@ function DashboardShell({
     setWorkspaceMessage(`Enter a target amount for ${template.name}.`);
   }
 
-  function startEditHolding(holdingId: string, unitsOrQuantity: string, avgPrice: string, optionId?: string | null) {
+  function startEditHolding(
+    holdingId: string,
+    unitsOrQuantity: string,
+    avgPrice: string,
+    optionId?: string | null,
+    goalId?: string | null
+  ) {
     setEditingHoldingId(holdingId);
-    setHoldingEditForm({ unitsOrQuantity, avgPrice, optionId: optionId ?? "" });
+    setHoldingEditForm({ unitsOrQuantity, avgPrice, optionId: optionId ?? "", goalId: goalId ?? "" });
     setWorkspaceError(null);
     setWorkspaceMessage(null);
   }
@@ -1776,18 +1783,21 @@ function DashboardShell({
         await api.updateMutualFundInvestment(token, editingHoldingId, {
           units: holdingEditForm.unitsOrQuantity,
           avg_price: holdingEditForm.avgPrice,
+          goal_id: holdingEditForm.goalId || null,
           category_option_id: holdingEditForm.optionId || null
         });
       } else if (activeInvestmentTab === "Stocks") {
         await api.updateStockInvestment(token, editingHoldingId, {
           quantity: holdingEditForm.unitsOrQuantity,
           avg_price: holdingEditForm.avgPrice,
+          goal_id: holdingEditForm.goalId || null,
           sector_option_id: holdingEditForm.optionId || null
         });
       } else if (activeInvestmentTab === "International Investment") {
         await api.updateInternationalInvestment(token, editingHoldingId, {
           quantity: holdingEditForm.unitsOrQuantity,
           avg_price: holdingEditForm.avgPrice,
+          goal_id: holdingEditForm.goalId || null,
           sector_option_id: holdingEditForm.optionId || null
         });
       }
@@ -3862,7 +3872,24 @@ function DashboardShell({
                           <td>
                             <span className={`pnl-chip pnl-chip--${tone}`}>{formatPnlPercent(pnlPercent)}</span>
                           </td>
-                          <td>{holding.goal_name ?? "-"}</td>
+                          <td>
+                            {isEditing ? (
+                              <select
+                                className="table-edit-input"
+                                value={holdingEditForm.goalId}
+                                onChange={(event) => setHoldingEditForm({ ...holdingEditForm, goalId: event.target.value })}
+                              >
+                                <option value="">No goal</option>
+                                {goals.map((goal) => (
+                                  <option key={goal.id} value={goal.id}>
+                                    {goal.name}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              holding.goal_name ?? "-"
+                            )}
+                          </td>
                           <td>
                             {isEditing ? (
                               <form className="inline-actions holding-edit-actions" onSubmit={submitHoldingEdit}>
@@ -3878,7 +3905,13 @@ function DashboardShell({
                                 className="subtle-action small-action"
                                 type="button"
                                 onClick={() =>
-                                  startEditHolding(holding.id, holding.units, holding.avg_price, holding.category_option_id)
+                                  startEditHolding(
+                                    holding.id,
+                                    holding.units,
+                                    holding.avg_price,
+                                    holding.category_option_id,
+                                    holding.goal_id
+                                  )
                                 }
                               >
                                 <Pencil size={14} />
@@ -4071,7 +4104,24 @@ function DashboardShell({
                           <td>
                             <span className={`pnl-chip pnl-chip--${tone}`}>{formatPnlPercent(pnlPercent)}</span>
                           </td>
-                          <td>{holding.goal_name ?? "-"}</td>
+                          <td>
+                            {isEditing ? (
+                              <select
+                                className="table-edit-input"
+                                value={holdingEditForm.goalId}
+                                onChange={(event) => setHoldingEditForm({ ...holdingEditForm, goalId: event.target.value })}
+                              >
+                                <option value="">No goal</option>
+                                {goals.map((goal) => (
+                                  <option key={goal.id} value={goal.id}>
+                                    {goal.name}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              holding.goal_name ?? "-"
+                            )}
+                          </td>
                           <td>
                             {isEditing ? (
                               <form className="inline-actions holding-edit-actions" onSubmit={submitHoldingEdit}>
@@ -4087,7 +4137,13 @@ function DashboardShell({
                                 className="subtle-action small-action"
                                 type="button"
                                 onClick={() =>
-                                  startEditHolding(holding.id, holding.quantity, holding.avg_price, holding.sector_option_id)
+                                  startEditHolding(
+                                    holding.id,
+                                    holding.quantity,
+                                    holding.avg_price,
+                                    holding.sector_option_id,
+                                    holding.goal_id
+                                  )
                                 }
                               >
                                 <Pencil size={14} />
@@ -4239,6 +4295,10 @@ function DashboardShell({
                 </strong>
               </article>
             </section>
+            <p className="form-hint">
+              Note: International return % is an approximation. If you invest in INR, changing USD/INR exchange rates can
+              impact returns, so the percentage may not be fully accurate.
+            </p>
 
             <div className="table-wrapper">
               {!internationalPortfolio || internationalPortfolio.holdings.length === 0 ? (
@@ -4328,7 +4388,24 @@ function DashboardShell({
                           <td>
                             <span className={`pnl-chip pnl-chip--${tone}`}>{formatPnlPercent(pnlPercent)}</span>
                           </td>
-                          <td>{holding.goal_name ?? "-"}</td>
+                          <td>
+                            {isEditing ? (
+                              <select
+                                className="table-edit-input"
+                                value={holdingEditForm.goalId}
+                                onChange={(event) => setHoldingEditForm({ ...holdingEditForm, goalId: event.target.value })}
+                              >
+                                <option value="">No goal</option>
+                                {goals.map((goal) => (
+                                  <option key={goal.id} value={goal.id}>
+                                    {goal.name}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              holding.goal_name ?? "-"
+                            )}
+                          </td>
                           <td>
                             {isEditing ? (
                               <form className="inline-actions holding-edit-actions" onSubmit={submitHoldingEdit}>
@@ -4344,7 +4421,13 @@ function DashboardShell({
                                 className="subtle-action small-action"
                                 type="button"
                                 onClick={() =>
-                                  startEditHolding(holding.id, holding.quantity, holding.avg_price, holding.sector_option_id)
+                                  startEditHolding(
+                                    holding.id,
+                                    holding.quantity,
+                                    holding.avg_price,
+                                    holding.sector_option_id,
+                                    holding.goal_id
+                                  )
                                 }
                               >
                                 <Pencil size={14} />
