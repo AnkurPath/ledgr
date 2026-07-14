@@ -1,3 +1,4 @@
+from datetime import date as dt_date
 from decimal import Decimal, ROUND_HALF_UP
 import http.cookiejar
 import json
@@ -21,6 +22,7 @@ from ledgr.features.investments.models import (
     StockInvestmentModel,
 )
 from ledgr.features.investments.schemas import (
+    InvestmentPriceRefreshResponse,
     InvestmentOptionCreate,
     InvestmentOptionResponse,
     InvestmentOptionsCatalogResponse,
@@ -38,6 +40,7 @@ from ledgr.features.investments.schemas import (
     StockInvestmentUpsertRequest,
 )
 from ledgr.features.users.models import GoalModel
+from ledgr.utils.mfdata import refresh_mutual_fund_nav
 
 THREE_DECIMAL_PLACES = Decimal("0.001")
 SIX_DECIMAL_PLACES = Decimal("0.000001")
@@ -814,6 +817,124 @@ def list_international_portfolio(
         total_current_value=total_current,
         total_pnl=total_pnl,
         total_pnl_percent=total_pnl_percent,
+    )
+
+
+def refresh_investment_prices_for_user(*, session: Session, user_id: UUID) -> InvestmentPriceRefreshResponse:
+    latest_nav_date = (
+        session.exec(select(MutualFundDataModel.date).order_by(MutualFundDataModel.date.desc()).limit(1)).first()
+    )
+    should_refresh_nav = latest_nav_date is None or latest_nav_date < dt_date.today()
+    nav_stats = {
+        "fetched": 0,
+        "updated": 0,
+        "inserted": 0,
+        "skipped": 0,
+        "failed": 0,
+    }
+    if should_refresh_nav:
+        nav_stats = refresh_mutual_fund_nav(session)
+
+    stocks_total = 0
+    stocks_updated = 0
+    stocks_failed = 0
+    international_total = 0
+    international_updated = 0
+    international_failed = 0
+    goal_ids_to_recalculate: set[UUID] = set()
+
+    stock_holdings = session.exec(select(StockInvestmentModel).where(StockInvestmentModel.user_id == user_id)).all()
+    stocks_total = len(stock_holdings)
+    for investment in stock_holdings:
+        try:
+            _, current_price, fetched_name = fetch_current_price(
+                symbol=investment.symbol,
+                exchange=investment.exchange,
+                market="IN",
+            )
+        except MarketDataUnavailable:
+            stocks_failed += 1
+            continue
+
+        changed = False
+        normalized_price = quantize_three_places(current_price)
+        if investment.current_price != normalized_price:
+            investment.current_price = normalized_price
+            changed = True
+        if fetched_name and fetched_name.strip() and fetched_name.strip() != (investment.company_name or "").strip():
+            investment.company_name = fetched_name.strip()
+            changed = True
+        if changed:
+            session.add(investment)
+            stocks_updated += 1
+            if investment.goal_id is not None:
+                goal_ids_to_recalculate.add(investment.goal_id)
+
+    try:
+        international_holdings = session.exec(
+            select(InternationalInvestmentModel).where(InternationalInvestmentModel.user_id == user_id)
+        ).all()
+    except ProgrammingError as exc:
+        if _is_missing_international_table_error(exc):
+            session.rollback()
+            international_holdings = []
+        else:
+            raise
+    international_total = len(international_holdings)
+    for investment in international_holdings:
+        try:
+            _, current_price, fetched_name = fetch_current_price(
+                symbol=investment.symbol,
+                market=investment.market,
+            )
+        except MarketDataUnavailable:
+            international_failed += 1
+            continue
+
+        changed = False
+        normalized_price = quantize_three_places(current_price)
+        if investment.current_price != normalized_price:
+            investment.current_price = normalized_price
+            changed = True
+        if fetched_name and fetched_name.strip() and fetched_name.strip() != (investment.security_name or "").strip():
+            investment.security_name = fetched_name.strip()
+            changed = True
+        if changed:
+            session.add(investment)
+            international_updated += 1
+            if investment.goal_id is not None:
+                goal_ids_to_recalculate.add(investment.goal_id)
+
+    if should_refresh_nav:
+        mf_goal_ids = session.exec(
+            select(MutualFundInvestmentModel.goal_id).where(MutualFundInvestmentModel.user_id == user_id)
+        ).all()
+        for goal_id in mf_goal_ids:
+            if goal_id is not None:
+                goal_ids_to_recalculate.add(goal_id)
+
+    if stocks_updated > 0 or international_updated > 0:
+        session.commit()
+
+    for goal_id in goal_ids_to_recalculate:
+        recalculate_goal_current_amount(session=session, user_id=user_id, goal_id=goal_id)
+
+    latest_nav_date = session.exec(select(func.max(MutualFundDataModel.date))).one()
+
+    return InvestmentPriceRefreshResponse(
+        nav_refreshed=should_refresh_nav,
+        latest_nav_date=latest_nav_date,
+        nav_fetched=nav_stats["fetched"],
+        nav_updated=nav_stats["updated"],
+        nav_inserted=nav_stats["inserted"],
+        nav_skipped=nav_stats["skipped"],
+        nav_failed=nav_stats["failed"],
+        stocks_total=stocks_total,
+        stocks_updated=stocks_updated,
+        stocks_failed=stocks_failed,
+        international_total=international_total,
+        international_updated=international_updated,
+        international_failed=international_failed,
     )
 
 

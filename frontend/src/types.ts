@@ -339,6 +339,22 @@ export type CurrentPrice = {
   name?: string | null;
 };
 
+export type InvestmentPriceRefresh = {
+  nav_refreshed: boolean;
+  latest_nav_date: string | null;
+  nav_fetched: number;
+  nav_updated: number;
+  nav_inserted: number;
+  nav_skipped: number;
+  nav_failed: number;
+  stocks_total: number;
+  stocks_updated: number;
+  stocks_failed: number;
+  international_total: number;
+  international_updated: number;
+  international_failed: number;
+};
+
 export type InvestmentOption = {
   id: string;
   asset_type: string;

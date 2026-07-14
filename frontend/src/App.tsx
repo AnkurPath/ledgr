@@ -837,6 +837,8 @@ function DashboardShell({
   const [savingInternationalInvestment, setSavingInternationalInvestment] = useState(false);
   const [loadingStockPrice, setLoadingStockPrice] = useState(false);
   const [loadingInternationalPrice, setLoadingInternationalPrice] = useState(false);
+  const [refreshingInvestmentData, setRefreshingInvestmentData] = useState(false);
+  const [latestNavDateFromSource, setLatestNavDateFromSource] = useState<string | null>(null);
   const [mutualFundForm, setMutualFundForm] = useState({
     goalId: "",
     categoryOptionId: "",
@@ -931,13 +933,13 @@ function DashboardShell({
   });
 
   const sections: Array<{ icon: ReactNode; label: DashboardSection }> = [
-    { icon: <BarChart3 size={18} />, label: "Dashboard" },
-    { icon: <ArrowLeftRight size={18} />, label: "Transaction" },
-    { icon: <TrendingUp size={18} />, label: "Investment" },
-    { icon: <PiggyBank size={18} />, label: "Budget" },
-    { icon: <Target size={18} />, label: "Goal" },
-    { icon: <Wallet size={18} />, label: "Accounts" },
-    { icon: <UserRound size={18} />, label: "Profile" }
+    { icon: <BarChart3 size={16} />, label: "Dashboard" },
+    { icon: <ArrowLeftRight size={16} />, label: "Transaction" },
+    { icon: <TrendingUp size={16} />, label: "Investment" },
+    { icon: <PiggyBank size={16} />, label: "Budget" },
+    { icon: <Target size={16} />, label: "Goal" },
+    { icon: <Wallet size={16} />, label: "Accounts" },
+    { icon: <UserRound size={16} />, label: "Profile" }
   ];
 
   const transferCategory = useMemo(
@@ -1271,6 +1273,53 @@ function DashboardShell({
     setWorkspaceError(null);
     setWorkspaceMessage(null);
   }, [activeSection]);
+
+  useEffect(() => {
+    if (activeSection !== "Investment" || activeInvestmentTab !== "Mutual Funds") {
+      return;
+    }
+
+    let cancelled = false;
+    const refreshOnSectionOpen = async () => {
+      setRefreshingInvestmentData(true);
+      try {
+        const result = await api.refreshInvestmentPrices(token);
+        if (cancelled) {
+          return;
+        }
+        setLatestNavDateFromSource(result.latest_nav_date ?? null);
+        await loadWorkspace({ showLoader: false });
+        if (cancelled) {
+          return;
+        }
+        if (
+          result.nav_refreshed ||
+          result.stocks_updated > 0 ||
+          result.international_updated > 0
+        ) {
+          setWorkspaceMessage("Investment data refreshed with latest prices.");
+        }
+      } catch (caught) {
+        if (cancelled) {
+          return;
+        }
+        setWorkspaceError(
+          caught instanceof ApiError
+            ? caught.message
+            : "Unable to refresh latest investment prices right now."
+        );
+      } finally {
+        if (!cancelled) {
+          setRefreshingInvestmentData(false);
+        }
+      }
+    };
+
+    void refreshOnSectionOpen();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSection, activeInvestmentTab, token]);
 
   useEffect(() => {
     if (!showTransactionComposer) {
@@ -3140,21 +3189,24 @@ function DashboardShell({
     const isInternationalTab = activeInvestmentTab === "International Investment";
 
     const categoryPills = (
-      <div className="section-pills investment-category-pills" aria-label="Investment categories">
-        {investmentTabNames.map((tabName) => (
-          <button
-            key={tabName}
-            className={activeInvestmentTab === tabName ? "active" : ""}
-            type="button"
-            onClick={() => {
-              setActiveInvestmentTab(tabName);
-              setEditingHoldingId(null);
-            }}
-          >
-            {tabName}
-          </button>
-        ))}
-      </div>
+      <>
+        <div className="section-pills investment-category-pills" aria-label="Investment categories">
+          {investmentTabNames.map((tabName) => (
+            <button
+              key={tabName}
+              className={activeInvestmentTab === tabName ? "active" : ""}
+              type="button"
+              onClick={() => {
+                setActiveInvestmentTab(tabName);
+                setEditingHoldingId(null);
+              }}
+            >
+              {tabName}
+            </button>
+          ))}
+        </div>
+        {refreshingInvestmentData && <p className="form-hint">Refreshing latest NAV and market prices...</p>}
+      </>
     );
 
     if (isOverviewTab) {
@@ -3569,6 +3621,14 @@ function DashboardShell({
     const totalCurrentInInr = isInternationalTab && usdInrRate !== null ? totalCurrent * usdInrRate : null;
     const totalPnlInInr = isInternationalTab && usdInrRate !== null ? totalPnl * usdInrRate : null;
     const totalTone = pnlTone(totalPnl);
+    const latestMutualFundNavDate = isMutualFundsTab ? latestNavDateFromSource : null;
+    const todayIsoDate = new Date().toISOString().slice(0, 10);
+    const isLatestNavFromToday = latestMutualFundNavDate === todayIsoDate;
+    const latestNavStatusLabel = !latestMutualFundNavDate
+      ? "NAV date unavailable."
+      : isLatestNavFromToday
+        ? "Updated today."
+        : "Not updated today yet.";
 
     return (
       <div className="investment-section-shell">
@@ -3577,6 +3637,11 @@ function DashboardShell({
         <div>
           <p className="eyebrow">Investment</p>
           <h2>{isMutualFundsTab ? "Mutual fund portfolio" : isStocksTab ? "Stock portfolio" : "International portfolio"}</h2>
+          {isMutualFundsTab && (
+            <p className="form-hint">
+              Latest NAV available from AMFI source: {formatOptionalDate(latestMutualFundNavDate)}. {latestNavStatusLabel}
+            </p>
+          )}
         </div>
 
         {isMutualFundsTab && (
@@ -4377,7 +4442,7 @@ function DashboardShell({
       >
         <div className="sidebar-brand">
           <div className="sidebar-mark">
-            <WalletCards size={20} />
+            <WalletCards size={16} />
           </div>
           <div className="sidebar-brand-copy">
             <p className="eyebrow">Finance</p>
@@ -4398,13 +4463,6 @@ function DashboardShell({
             </button>
           ))}
         </nav>
-        <div className="sidebar-promo">
-          <strong>Stay on track</strong>
-          <p>Review goals and budgets to keep spending intentional.</p>
-          <button className="sidebar-promo-btn" type="button" aria-label="Open goals" onClick={() => onSelectSection("Goal")}>
-            <ArrowRight size={16} />
-          </button>
-        </div>
       </aside>
       <section className="dashboard-main">
         <header className="dashboard-topbar">

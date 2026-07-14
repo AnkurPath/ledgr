@@ -205,6 +205,22 @@ class CurrentPriceResponse(BaseModel):
     name: Optional[str] = None
 
 
+class InvestmentPriceRefreshResponse(BaseModel):
+    nav_refreshed: bool
+    latest_nav_date: Optional[dt_date] = None
+    nav_fetched: int
+    nav_updated: int
+    nav_inserted: int
+    nav_skipped: int
+    nav_failed: int
+    stocks_total: int
+    stocks_updated: int
+    stocks_failed: int
+    international_total: int
+    international_updated: int
+    international_failed: int
+
+
 class InvestmentOptionCreate(BaseModel):
     asset_type: str = Field(min_length=1, max_length=40)
     field_name: str = Field(min_length=1, max_length=40)

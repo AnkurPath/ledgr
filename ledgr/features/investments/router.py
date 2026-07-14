@@ -10,6 +10,7 @@ from ledgr.features.users.models import GoalModel
 from ledgr.features.users.models import UserModel
 from ledgr.features.investments.schemas import (
     CurrentPriceResponse,
+    InvestmentPriceRefreshResponse,
     InvestmentOptionCreate,
     InvestmentOptionResponse,
     InvestmentOptionsCatalogResponse,
@@ -37,6 +38,7 @@ from ledgr.features.investments.service import (
     list_investment_options_catalog,
     list_mutual_fund_portfolio,
     list_stock_portfolio,
+    refresh_investment_prices_for_user,
     search_mutual_funds,
     update_international_investment,
     update_mutual_fund_investment,
@@ -275,6 +277,14 @@ def get_international_current_price(
         current_price=current_price,
         name=name,
     )
+
+
+@router.post("/refresh-prices", response_model=InvestmentPriceRefreshResponse)
+def refresh_investment_prices(
+    session: Session = Depends(get_session),
+    current_user: UserModel = Depends(get_current_user),
+) -> InvestmentPriceRefreshResponse:
+    return refresh_investment_prices_for_user(session=session, user_id=current_user.id)
 
 
 @router.post(

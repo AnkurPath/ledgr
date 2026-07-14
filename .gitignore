@@ -7,3 +7,5 @@ frontend/dist/
 .venv/
 .pytetest_cache/
 alembic.ini
+**/.pyc
+__pycache__/

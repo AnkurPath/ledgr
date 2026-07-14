@@ -21,6 +21,7 @@ import type {
   UpdateTransactionPayload,
   Goal,
   GoalTemplate,
+  InvestmentPriceRefresh,
   InvestmentOptionsCatalog,
   LoginPayload,
   MutualFundInvestment,
@@ -238,5 +239,7 @@ export const api = {
   listInternationalPortfolio: (token: string) => request<InternationalPortfolio>("/investments/international", { token }),
   fetchInternationalCurrentPrice: (token: string, symbol: string) =>
     request<CurrentPrice>(`/investments/international/current-price?symbol=${encodeURIComponent(symbol)}`, { token }),
+  refreshInvestmentPrices: (token: string) =>
+    request<InvestmentPriceRefresh>("/investments/refresh-prices", { method: "POST", token }),
   listInvestmentOptions: (token: string) => request<InvestmentOptionsCatalog>("/investments/options", { token })
 };
