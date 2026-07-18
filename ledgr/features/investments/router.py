@@ -32,6 +32,9 @@ from ledgr.features.investments.service import (
     MarketDataRateLimited,
     MarketDataUnavailable,
     create_investment_option,
+    delete_international_investment,
+    delete_mutual_fund_investment,
+    delete_stock_investment,
     fetch_current_price,
     get_investment_option_by_id,
     list_international_portfolio,
@@ -161,6 +164,22 @@ def patch_mutual_fund_investment(
     return MutualFundInvestmentUpsertResponse.model_validate(investment, from_attributes=True)
 
 
+@router.delete("/mutual-funds/{investment_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_mutual_fund_investment(
+    investment_id: UUID,
+    session: Session = Depends(get_session),
+    current_user: UserModel = Depends(get_current_user),
+) -> None:
+    try:
+        delete_mutual_fund_investment(
+            session=session,
+            user_id=current_user.id,
+            investment_id=investment_id,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
 @router.post(
     "/stocks",
     response_model=StockInvestmentUpsertResponse,
@@ -232,6 +251,22 @@ def patch_stock_investment(
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     return StockInvestmentUpsertResponse.model_validate(investment, from_attributes=True)
+
+
+@router.delete("/stocks/{investment_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_stock_investment(
+    investment_id: UUID,
+    session: Session = Depends(get_session),
+    current_user: UserModel = Depends(get_current_user),
+) -> None:
+    try:
+        delete_stock_investment(
+            session=session,
+            user_id=current_user.id,
+            investment_id=investment_id,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
 @router.get("/stocks/current-price", response_model=CurrentPriceResponse)
@@ -358,3 +393,19 @@ def patch_international_investment(
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     return InternationalInvestmentUpsertResponse.model_validate(investment, from_attributes=True)
+
+
+@router.delete("/international/{investment_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_international_investment(
+    investment_id: UUID,
+    session: Session = Depends(get_session),
+    current_user: UserModel = Depends(get_current_user),
+) -> None:
+    try:
+        delete_international_investment(
+            session=session,
+            user_id=current_user.id,
+            investment_id=investment_id,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

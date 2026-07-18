@@ -165,6 +165,58 @@ def test_patch_mutual_fund_investment_sets_absolute_units_and_avg_price() -> Non
     assert holding["avg_price"] == "120.250"
 
 
+def test_delete_mutual_fund_investment_removes_holding() -> None:
+    client = make_test_client()
+    token = register_user(client)
+    seed_mutual_funds(client)
+    headers = auth_headers(token)
+
+    created = client.post(
+        "/investments/mutual-funds",
+        json={"scheme_code": 100001, "units": "2.000", "avg_price": "100.000"},
+        headers=headers,
+    )
+    assert created.status_code == 201
+    investment_id = created.json()["id"]
+
+    deleted = client.delete(f"/investments/mutual-funds/{investment_id}", headers=headers)
+    assert deleted.status_code == 204
+
+    portfolio = client.get("/investments/mutual-funds", headers=headers)
+    assert portfolio.status_code == 200
+    assert portfolio.json()["holdings"] == []
+
+    missing = client.delete(f"/investments/mutual-funds/{investment_id}", headers=headers)
+    assert missing.status_code == 404
+
+
+def test_delete_stock_investment_removes_holding() -> None:
+    client = make_test_client()
+    token = register_user(client, email="stock-delete@example.com")
+    headers = auth_headers(token)
+
+    created = client.post(
+        "/investments/stocks",
+        json={
+            "symbol": "INFY",
+            "company_name": "Infosys",
+            "quantity": "10.000",
+            "avg_price": "1500.000",
+            "current_price": "1600.000",
+        },
+        headers=headers,
+    )
+    assert created.status_code == 201
+    investment_id = created.json()["id"]
+
+    deleted = client.delete(f"/investments/stocks/{investment_id}", headers=headers)
+    assert deleted.status_code == 204
+
+    portfolio = client.get("/investments/stocks", headers=headers)
+    assert portfolio.status_code == 200
+    assert portfolio.json()["holdings"] == []
+
+
 def test_list_mutual_fund_portfolio_returns_valuation_fields() -> None:
     client = make_test_client()
     token = register_user(client)

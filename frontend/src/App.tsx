@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, Fragment, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import {
   ArrowLeftRight,
@@ -15,6 +15,7 @@ import {
   Plus,
   RefreshCw,
   Target,
+  Trash2,
   TrendingUp,
   UserPlus,
   UserRound,
@@ -39,6 +40,7 @@ import type {
   Goal,
   GoalTemplate,
   MutualFundPortfolio,
+  MutualFundPortfolioHolding,
   MutualFundSearchItem,
   NetWorthOverview,
   StockPortfolio,
@@ -58,26 +60,305 @@ type TransactionDatePreset = "this_month" | "last_month" | "this_year" | "custom
 const ANALYSIS_TAG_NAMES = ["Needs", "Wants", "Investments"] as const;
 type AnalysisTagName = (typeof ANALYSIS_TAG_NAMES)[number];
 const ANALYSIS_TAG_COLORS: Record<AnalysisTagName, string> = {
-  Needs: "#e85d4c",
-  Wants: "#e8a87c",
-  Investments: "#3d7ea6"
+  Needs: "#0a0a0a",
+  Wants: "#6b6b6b",
+  Investments: "#b0b0b0"
 };
-const INVESTMENT_ALLOCATION_COLORS = {
-  indianEquity: "#4f46e5",
-  gold: "#d4a017",
-  international: "#0ea5e9",
-  others: "#94a3b8"
-} as const;
-const investmentTabNames = [
-  "Overview",
+const ASSET_CLASS_LABELS = [
   "Mutual Funds",
   "Stocks",
   "International Investment",
+  "Gold",
   "Fixed Deposit",
   "Real Estate",
   "Crypto",
   "Provident Fund"
 ] as const;
+type AssetClassLabel = (typeof ASSET_CLASS_LABELS)[number];
+const INVESTMENT_ALLOCATION_COLORS: Record<AssetClassLabel, string> = {
+  "Mutual Funds": "#1e3a5f",
+  Stocks: "#3b6ea5",
+  "International Investment": "#6b8cae",
+  Gold: "#d4af37",
+  "Fixed Deposit": "#8b7355",
+  "Real Estate": "#c0563a",
+  Crypto: "#8b5e3c",
+  "Provident Fund": "#5c5346"
+};
+const TRANSACTION_ASSET_CLASSES = ["Fixed Deposit", "Real Estate", "Crypto", "Provident Fund"] as const;
+type TransactionAssetClass = (typeof TRANSACTION_ASSET_CLASSES)[number];
+const INVESTMENT_TAB_ASSET_CLASSES = ASSET_CLASS_LABELS.filter(
+  (label) => label !== "Gold"
+) as Exclude<AssetClassLabel, "Gold">[];
+
+function isTransactionAssetClass(label: string): label is TransactionAssetClass {
+  return (TRANSACTION_ASSET_CLASSES as readonly string[]).includes(label);
+}
+
+function isGoldLabeled(name: string | null | undefined): boolean {
+  return (name ?? "").trim().toLowerCase() === "gold";
+}
+
+const investmentTabNames = ["Overview", ...INVESTMENT_TAB_ASSET_CLASSES] as const;
+
+type GoalPercentAllocation = { goalId: string; percent: string };
+
+function goalCompletionPercent(goal: Goal): number {
+  const target = parseAmount(goal.target_amount);
+  if (target <= 0) {
+    return 0;
+  }
+  return Math.min(100, (parseAmount(goal.current_amount) / target) * 100);
+}
+
+function compareGoalsByCompletion(left: Goal, right: Goal): number {
+  const completionDelta = goalCompletionPercent(right) - goalCompletionPercent(left);
+  if (completionDelta !== 0) {
+    return completionDelta;
+  }
+  return left.name.localeCompare(right.name);
+}
+
+function formatPercentValue(value: number): string {
+  return (Math.round(value * 100) / 100).toFixed(2);
+}
+
+function equalGoalPercents(count: number): string[] {
+  if (count <= 0) {
+    return [];
+  }
+  if (count === 1) {
+    return ["100.00"];
+  }
+  const base = Math.floor(10000 / count) / 100;
+  const percents = Array.from({ length: count }, () => base);
+  const assigned = base * (count - 1);
+  percents[count - 1] = Math.round((100 - assigned) * 100) / 100;
+  return percents.map((value) => formatPercentValue(value));
+}
+
+function redistributeGoalPercents(allocations: GoalPercentAllocation[]): GoalPercentAllocation[] {
+  const percents = equalGoalPercents(allocations.length);
+  return allocations.map((entry, index) => ({ ...entry, percent: percents[index] ?? "0.00" }));
+}
+
+function toggleGoalPercentAllocation(
+  current: GoalPercentAllocation[],
+  goalId: string
+): GoalPercentAllocation[] {
+  const exists = current.some((entry) => entry.goalId === goalId);
+  const next = exists
+    ? current.filter((entry) => entry.goalId !== goalId)
+    : [...current, { goalId, percent: "0" }];
+  return redistributeGoalPercents(next);
+}
+
+function updateGoalPercent(
+  current: GoalPercentAllocation[],
+  goalId: string,
+  percent: string
+): GoalPercentAllocation[] {
+  return current.map((entry) => (entry.goalId === goalId ? { ...entry, percent } : entry));
+}
+
+function goalPercentTotal(allocations: GoalPercentAllocation[]): number {
+  return allocations.reduce((sum, entry) => sum + (Number.parseFloat(entry.percent) || 0), 0);
+}
+
+function validateGoalPercentAllocations(allocations: GoalPercentAllocation[]): string | null {
+  if (allocations.length === 0) {
+    return null;
+  }
+  const total = goalPercentTotal(allocations);
+  if (Math.abs(total - 100) > 0.01) {
+    return `Goal percentages must add up to 100% (currently ${total.toFixed(2)}%).`;
+  }
+  if (allocations.some((entry) => (Number.parseFloat(entry.percent) || 0) <= 0)) {
+    return "Each selected goal needs a percentage greater than 0.";
+  }
+  return null;
+}
+
+function splitQuantityByPercents(total: number, percents: number[], decimalPlaces: number): number[] {
+  if (percents.length === 0) {
+    return [];
+  }
+  const factor = 10 ** decimalPlaces;
+  const roundedTotal = Math.round(total * factor) / factor;
+  const shares = percents.map((percent) => Math.floor((roundedTotal * percent * factor) / 100) / factor);
+  const assigned = shares.slice(0, -1).reduce((sum, value) => sum + value, 0);
+  shares[shares.length - 1] = Math.round((roundedTotal - assigned) * factor) / factor;
+  return shares;
+}
+
+function quantityToPayload(value: number, decimalPlaces: number): string {
+  return value.toFixed(decimalPlaces);
+}
+
+type GoalQuantitySibling = { id: string; goal_id: string | null; quantity: number };
+
+function proportionsFromQuantities(quantities: number[]): number[] {
+  const total = quantities.reduce((sum, value) => sum + value, 0);
+  if (quantities.length === 0) {
+    return [];
+  }
+  if (total <= 0) {
+    return equalGoalPercents(quantities.length).map((value) => Number.parseFloat(value));
+  }
+  const percents = quantities.map((value) => (value / total) * 100);
+  const rounded = percents.map((percent, index) =>
+    index === percents.length - 1 ? 0 : Math.round(percent * 100) / 100
+  );
+  const assigned = rounded.slice(0, -1).reduce((sum, value) => sum + value, 0);
+  rounded[rounded.length - 1] = Math.round((100 - assigned) * 100) / 100;
+  return rounded;
+}
+
+function resolveSipGoalSplits(options: {
+  pickerAllocations: GoalPercentAllocation[];
+  siblingHoldings: GoalQuantitySibling[];
+}): { goalIds: (string | null)[]; percents: number[]; usedExistingSiblings: boolean } {
+  if (options.pickerAllocations.length > 0) {
+    return {
+      goalIds: options.pickerAllocations.map((entry) => entry.goalId),
+      percents: options.pickerAllocations.map((entry) => Number.parseFloat(entry.percent) || 0),
+      usedExistingSiblings: false
+    };
+  }
+
+  const siblings = options.siblingHoldings.filter((holding) => holding.goal_id != null);
+  if (siblings.length > 0) {
+    return {
+      goalIds: siblings.map((holding) => holding.goal_id),
+      percents: proportionsFromQuantities(siblings.map((holding) => holding.quantity)),
+      usedExistingSiblings: siblings.length > 1
+    };
+  }
+
+  return { goalIds: [null], percents: [100], usedExistingSiblings: false };
+}
+
+function mutualFundGoalSiblings(
+  holdings: MutualFundPortfolioHolding[],
+  schemeCode: number
+): GoalQuantitySibling[] {
+  return holdings
+    .filter((holding) => holding.scheme_code === schemeCode && holding.goal_id != null)
+    .map((holding) => ({
+      id: holding.id,
+      goal_id: holding.goal_id,
+      quantity: parseAmount(holding.units)
+    }));
+}
+
+function symbolGoalSiblings(
+  holdings: Array<{ id: string; symbol: string; goal_id: string | null; quantity: string }>,
+  symbol: string
+): GoalQuantitySibling[] {
+  const normalized = symbol.trim().toUpperCase();
+  return holdings
+    .filter((holding) => holding.symbol.trim().toUpperCase() === normalized && holding.goal_id != null)
+    .map((holding) => ({
+      id: holding.id,
+      goal_id: holding.goal_id,
+      quantity: parseAmount(holding.quantity)
+    }));
+}
+
+type LinkedGoalShare = { goalId: string; goalName: string; percent: number };
+
+function linkedGoalShares(
+  siblings: Array<{ goal_id: string | null; goal_name: string | null; quantity: number }>
+): LinkedGoalShare[] {
+  const withGoals = siblings.filter((entry) => entry.goal_id != null);
+  const percents = proportionsFromQuantities(withGoals.map((entry) => entry.quantity));
+  return withGoals.map((entry, index) => ({
+    goalId: entry.goal_id as string,
+    goalName: entry.goal_name?.trim() || "Goal",
+    percent: percents[index] ?? 0
+  }));
+}
+
+function LinkedGoalsCell({ shares }: { shares: LinkedGoalShare[] }) {
+  return (
+    <div className="linked-goals-cell">
+      {shares.map((share) => (
+        <span key={share.goalId} className="linked-goals-chip">
+          {share.goalName} {share.percent.toFixed(0)}%
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function GoalAllocationPicker({
+  goals,
+  allocations,
+  onChange,
+  sipHint
+}: {
+  goals: Goal[];
+  allocations: GoalPercentAllocation[];
+  onChange: (next: GoalPercentAllocation[]) => void;
+  sipHint?: string | null;
+}) {
+  const total = goalPercentTotal(allocations);
+  const totalOk = allocations.length === 0 || Math.abs(total - 100) <= 0.01;
+
+  return (
+    <div className="goal-allocation-picker">
+      <div className="goal-allocation-picker-header">
+        <span>Goals &amp; allocation</span>
+        {allocations.length > 0 ? (
+          <span className={`goal-allocation-total${totalOk ? " ok" : " bad"}`}>Total {total.toFixed(2)}%</span>
+        ) : (
+          <span className="goal-allocation-total">Optional — select one or more goals</span>
+        )}
+      </div>
+      {sipHint ? <p className="form-hint goal-sip-hint">{sipHint}</p> : null}
+      {goals.length === 0 ? (
+        <p className="form-hint">No goals yet. Create goals to split this investment across them.</p>
+      ) : (
+        <div className="goal-allocation-list">
+          {goals.map((goal) => {
+            const selected = allocations.find((entry) => entry.goalId === goal.id);
+            return (
+              <div key={goal.id} className={`goal-allocation-row${selected ? " selected" : ""}`}>
+                <label className="goal-allocation-check">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(selected)}
+                    onChange={() => onChange(toggleGoalPercentAllocation(allocations, goal.id))}
+                  />
+                  <span>{goal.name}</span>
+                </label>
+                {selected && (
+                  <label className="goal-allocation-percent">
+                    <input
+                      type="number"
+                      min="0.01"
+                      max="100"
+                      step="0.01"
+                      value={selected.percent}
+                      onChange={(event) => onChange(updateGoalPercent(allocations, goal.id, event.target.value))}
+                    />
+                    <span>%</span>
+                  </label>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {allocations.length > 1 && (
+        <p className="form-hint">
+          Selecting goals auto-fills equal percentages (for example 50/50 or 33.33/33.33/33.34). Adjust as needed so
+          they total 100%.
+        </p>
+      )}
+    </div>
+  );
+}
 
 const blankForm = {
   email: "",
@@ -184,7 +465,7 @@ function AllocationDonutChart({
         aria-label={ariaLabel}
       >
         {slices.length === 0 ? (
-          <circle cx={cx} cy={cy} r={outerRadius} fill="#eef2ff" />
+          <circle cx={cx} cy={cy} r={outerRadius} fill="#f0f0f0" />
         ) : (
           slices.map((slice) => (
             <path
@@ -383,27 +664,49 @@ function LandingPage({
     <div className="landing-page">
       <header className="landing-nav">
         <button className="landing-brand" type="button" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}>
-          <span className="landing-brand-mark">
-            <WalletCards size={20} />
-          </span>
           Ledgr
         </button>
         <div className="landing-nav-actions">
           <button className="landing-link" type="button" onClick={onLogin}>
             Log in
           </button>
-          <button className="landing-cta-secondary" type="button" onClick={onGetStarted}>
+          <button className="landing-nav-cta" type="button" onClick={onGetStarted}>
             Get started
           </button>
         </div>
       </header>
 
       <section className="landing-hero" aria-label="Ledgr introduction">
+        <div className="landing-hero-plane" aria-hidden="true">
+          <div className="landing-hero-mesh" />
+          <svg className="landing-hero-chart" viewBox="0 0 1200 640" preserveAspectRatio="xMidYMid slice">
+            <defs>
+              <linearGradient id="landing-chart-fill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="rgba(0, 0, 0, 0.16)" />
+                <stop offset="100%" stopColor="rgba(0, 0, 0, 0)" />
+              </linearGradient>
+            </defs>
+            <path
+              className="landing-hero-chart-area"
+              d="M0 520 C180 480 260 390 420 360 C580 330 640 420 780 300 C920 180 1020 220 1200 140 L1200 640 L0 640 Z"
+              fill="url(#landing-chart-fill)"
+            />
+            <path
+              className="landing-hero-chart-line"
+              d="M0 520 C180 480 260 390 420 360 C580 330 640 420 780 300 C920 180 1020 220 1200 140"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+            />
+          </svg>
+        </div>
+
         <div className="landing-hero-copy">
           <p className="landing-brand-hero">Ledgr</p>
-          <h1>See every rupee with quiet clarity.</h1>
+          <h1>Personal finance, kept simple.</h1>
           <p className="landing-hero-support">
-            Track spending, investments, budgets, and goals in one calm workspace built for everyday money decisions.
+            Spend, save, and invest with a clear picture of where your money goes.
           </p>
           <div className="landing-hero-ctas">
             <button className="landing-cta-primary" type="button" onClick={onGetStarted}>
@@ -411,60 +714,15 @@ function LandingPage({
               <ArrowRight size={18} />
             </button>
             <button className="landing-cta-ghost" type="button" onClick={onLogin}>
-              I already have an account
+              Log in
             </button>
-          </div>
-        </div>
-
-        <div className="landing-hero-visual" aria-hidden="true">
-          <div className="landing-hero-glow" />
-          <div className="landing-preview">
-            <div className="landing-preview-sidebar">
-              <span />
-              <span />
-              <span />
-              <span />
-            </div>
-            <div className="landing-preview-main">
-              <div className="landing-preview-title" />
-              <div className="landing-preview-actions">
-                <span />
-                <span />
-                <span />
-                <span />
-              </div>
-              <div className="landing-preview-cards">
-                <div className="landing-preview-balance">
-                  <em />
-                  <strong />
-                </div>
-                <div className="landing-preview-donut" />
-              </div>
-              <div className="landing-preview-chart">
-                <i />
-                <i />
-                <i />
-                <i />
-                <i />
-                <i />
-                <i />
-              </div>
-            </div>
-            <div className="landing-preview-rail">
-              <div className="landing-preview-card" />
-              <div className="landing-preview-activity">
-                <span />
-                <span />
-                <span />
-              </div>
-            </div>
           </div>
         </div>
       </section>
 
       <section className="landing-focus" aria-label="What Ledgr helps with">
-        <h2>One place for the money that matters.</h2>
-        <p>Accounts, transactions, mutual funds, stocks, budgets, and goals — connected so your next decision is easier.</p>
+        <h2>Clarity for every rupee.</h2>
+        <p>Accounts, budgets, investments, and goals — one quiet place to steer your money.</p>
       </section>
     </div>
   );
@@ -636,12 +894,9 @@ function App() {
       <section className="auth-panel" aria-label="Ledgr authentication">
         <div className="brand-pane">
           <button className="brand-home" type="button" onClick={openLanding}>
-            <div className="brand-mark">
-              <WalletCards size={30} />
-            </div>
-            <p className="eyebrow">Ledgr</p>
+            <p className="brand-pane-name">Ledgr</p>
           </button>
-          <h1>Your money, clearly in view.</h1>
+          <h1>Personal finance, kept simple.</h1>
           <div className={`status-pill ${apiStatus}`}>
             {apiStatus === "checking" ? <Loader2 className="spin" size={16} /> : <CheckCircle2 size={16} />}
             <span>{apiStatus === "checking" ? "Checking API" : apiStatus === "ok" ? "API online" : "API offline"}</span>
@@ -806,7 +1061,10 @@ function DashboardShell({
   const [netWorthHoverIndex, setNetWorthHoverIndex] = useState<number | null>(null);
   const [analysisDonutFocus, setAnalysisDonutFocus] = useState<AnalysisTagName | "untagged" | null>(null);
   const [allocationFocus, setAllocationFocus] = useState<string | null>(null);
-  const [goalAllocationFocus, setGoalAllocationFocus] = useState<{ goalId: string; label: string } | null>(null);
+  const [goalAllocationFocus, setGoalAllocationFocus] = useState<{
+    goalId: string;
+    label: string | null;
+  } | null>(null);
 
   useEffect(() => {
     if (allocationFocus === null && goalAllocationFocus === null) {
@@ -840,7 +1098,7 @@ function DashboardShell({
   const [refreshingInvestmentData, setRefreshingInvestmentData] = useState(false);
   const [latestNavDateFromSource, setLatestNavDateFromSource] = useState<string | null>(null);
   const [mutualFundForm, setMutualFundForm] = useState({
-    goalId: "",
+    goalAllocations: [] as GoalPercentAllocation[],
     categoryOptionId: "",
     units: "",
     avgPrice: ""
@@ -849,7 +1107,7 @@ function DashboardShell({
     symbol: "",
     companyName: "",
     exchange: "",
-    goalId: "",
+    goalAllocations: [] as GoalPercentAllocation[],
     sectorOptionId: "",
     quantity: "",
     avgPrice: "",
@@ -859,7 +1117,7 @@ function DashboardShell({
     symbol: "",
     securityName: "",
     instrumentType: "stock" as "stock" | "index",
-    goalId: "",
+    goalAllocations: [] as GoalPercentAllocation[],
     sectorOptionId: "",
     quantity: "",
     avgPrice: "",
@@ -914,6 +1172,12 @@ function DashboardShell({
     goalId: ""
   });
   const [savingHoldingEdit, setSavingHoldingEdit] = useState(false);
+  const [holdingPendingDelete, setHoldingPendingDelete] = useState<{
+    id: string;
+    label: string;
+    assetClass: "mutual_funds" | "stocks" | "international";
+  } | null>(null);
+  const [deletingHolding, setDeletingHolding] = useState(false);
   const [budgetForm, setBudgetForm] = useState({
     name: "",
     amount: "",
@@ -1163,6 +1427,10 @@ function DashboardShell({
     return () => window.clearInterval(timer);
   }, []);
   const goalsCount = goals.length;
+  const goalsByCompletion = useMemo(
+    () => [...goals].sort(compareGoalsByCompletion),
+    [goals]
+  );
   const investmentCategoryById = useMemo(
     () => Object.fromEntries(categoriesByKind.investment.map((category) => [category.id, category.name])),
     [categoriesByKind.investment]
@@ -1483,22 +1751,56 @@ function DashboardShell({
       setWorkspaceError("Please search and select a mutual fund first.");
       return;
     }
+    const allocationError = validateGoalPercentAllocations(mutualFundForm.goalAllocations);
+    if (allocationError) {
+      setWorkspaceError(allocationError);
+      return;
+    }
+
+    const totalUnits = Number.parseFloat(mutualFundForm.units);
+    if (!Number.isFinite(totalUnits) || totalUnits <= 0) {
+      setWorkspaceError("Enter a valid units amount.");
+      return;
+    }
+
     setSavingMutualFundInvestment(true);
     setWorkspaceError(null);
     setWorkspaceMessage(null);
 
-    const payload: CreateMutualFundInvestmentPayload = {
-      scheme_code: selectedMutualFund.scheme_code,
-      goal_id: mutualFundForm.goalId || null,
-      category_option_id: mutualFundForm.categoryOptionId || null,
-      units: mutualFundForm.units,
-      avg_price: mutualFundForm.avgPrice
-    };
+    const allocations = mutualFundForm.goalAllocations;
+    const existingSiblings = mutualFundGoalSiblings(
+      mutualFundPortfolio?.holdings ?? [],
+      selectedMutualFund.scheme_code
+    );
+    const { goalIds, percents, usedExistingSiblings } = resolveSipGoalSplits({
+      pickerAllocations: allocations,
+      siblingHoldings: existingSiblings
+    });
+    const unitShares = splitQuantityByPercents(totalUnits, percents, 3);
 
     try {
-      await api.createMutualFundInvestment(token, payload);
-      setWorkspaceMessage("Mutual fund investment saved.");
-      setMutualFundForm({ goalId: "", categoryOptionId: "", units: "", avgPrice: "" });
+      for (let index = 0; index < goalIds.length; index += 1) {
+        const units = unitShares[index] ?? 0;
+        if (units <= 0) {
+          continue;
+        }
+        const payload: CreateMutualFundInvestmentPayload = {
+          scheme_code: selectedMutualFund.scheme_code,
+          goal_id: goalIds[index],
+          category_option_id: mutualFundForm.categoryOptionId || null,
+          units: quantityToPayload(units, 3),
+          avg_price: mutualFundForm.avgPrice
+        };
+        await api.createMutualFundInvestment(token, payload);
+      }
+      setWorkspaceMessage(
+        usedExistingSiblings
+          ? `SIP added across ${goalIds.length} existing goals.`
+          : allocations.length > 1
+            ? `Mutual fund investment saved across ${allocations.length} goals.`
+            : "Mutual fund investment saved."
+      );
+      setMutualFundForm({ goalAllocations: [], categoryOptionId: "", units: "", avgPrice: "" });
       setSelectedMutualFund(null);
       setMutualFundSearchQuery("");
       setMutualFundSearchResults([]);
@@ -1512,29 +1814,60 @@ function DashboardShell({
 
   async function submitStockInvestment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const allocationError = validateGoalPercentAllocations(stockForm.goalAllocations);
+    if (allocationError) {
+      setWorkspaceError(allocationError);
+      return;
+    }
+
+    const totalQuantity = Number.parseFloat(stockForm.quantity);
+    if (!Number.isFinite(totalQuantity) || totalQuantity <= 0) {
+      setWorkspaceError("Enter a valid quantity.");
+      return;
+    }
+
     setSavingStockInvestment(true);
     setWorkspaceError(null);
     setWorkspaceMessage(null);
 
-    const payload: CreateStockInvestmentPayload = {
-      symbol: stockForm.symbol,
-      company_name: stockForm.companyName || null,
-      exchange: stockForm.exchange || null,
-      goal_id: stockForm.goalId || null,
-      sector_option_id: stockForm.sectorOptionId || null,
-      quantity: stockForm.quantity,
-      avg_price: stockForm.avgPrice,
-      current_price: stockForm.currentPrice || undefined
-    };
+    const allocations = stockForm.goalAllocations;
+    const existingSiblings = symbolGoalSiblings(stockPortfolio?.holdings ?? [], stockForm.symbol);
+    const { goalIds, percents, usedExistingSiblings } = resolveSipGoalSplits({
+      pickerAllocations: allocations,
+      siblingHoldings: existingSiblings
+    });
+    const quantityShares = splitQuantityByPercents(totalQuantity, percents, 3);
 
     try {
-      await api.createStockInvestment(token, payload);
-      setWorkspaceMessage("Stock investment saved.");
+      for (let index = 0; index < goalIds.length; index += 1) {
+        const quantity = quantityShares[index] ?? 0;
+        if (quantity <= 0) {
+          continue;
+        }
+        const payload: CreateStockInvestmentPayload = {
+          symbol: stockForm.symbol,
+          company_name: stockForm.companyName || null,
+          exchange: stockForm.exchange || null,
+          goal_id: goalIds[index],
+          sector_option_id: stockForm.sectorOptionId || null,
+          quantity: quantityToPayload(quantity, 3),
+          avg_price: stockForm.avgPrice,
+          current_price: stockForm.currentPrice || undefined
+        };
+        await api.createStockInvestment(token, payload);
+      }
+      setWorkspaceMessage(
+        usedExistingSiblings
+          ? `SIP added across ${goalIds.length} existing goals.`
+          : allocations.length > 1
+            ? `Stock investment saved across ${allocations.length} goals.`
+            : "Stock investment saved."
+      );
       setStockForm({
         symbol: "",
         companyName: "",
         exchange: "",
-        goalId: "",
+        goalAllocations: [],
         sectorOptionId: "",
         quantity: "",
         avgPrice: "",
@@ -1604,30 +1937,64 @@ function DashboardShell({
 
   async function submitInternationalInvestment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const allocationError = validateGoalPercentAllocations(internationalForm.goalAllocations);
+    if (allocationError) {
+      setWorkspaceError(allocationError);
+      return;
+    }
+
+    const totalQuantity = Number.parseFloat(internationalForm.quantity);
+    if (!Number.isFinite(totalQuantity) || totalQuantity <= 0) {
+      setWorkspaceError("Enter a valid quantity.");
+      return;
+    }
+
     setSavingInternationalInvestment(true);
     setWorkspaceError(null);
     setWorkspaceMessage(null);
 
-    const payload: CreateInternationalInvestmentPayload = {
-      symbol: internationalForm.symbol,
-      security_name: internationalForm.securityName || null,
-      market: "US",
-      instrument_type: internationalForm.instrumentType,
-      goal_id: internationalForm.goalId || null,
-      sector_option_id: internationalForm.sectorOptionId || null,
-      quantity: internationalForm.quantity,
-      avg_price: internationalForm.avgPrice,
-      current_price: internationalForm.currentPrice || undefined
-    };
+    const allocations = internationalForm.goalAllocations;
+    const existingSiblings = symbolGoalSiblings(
+      internationalPortfolio?.holdings ?? [],
+      internationalForm.symbol
+    );
+    const { goalIds, percents, usedExistingSiblings } = resolveSipGoalSplits({
+      pickerAllocations: allocations,
+      siblingHoldings: existingSiblings
+    });
+    const quantityShares = splitQuantityByPercents(totalQuantity, percents, 6);
 
     try {
-      await api.createInternationalInvestment(token, payload);
-      setWorkspaceMessage("International investment saved.");
+      for (let index = 0; index < goalIds.length; index += 1) {
+        const quantity = quantityShares[index] ?? 0;
+        if (quantity <= 0) {
+          continue;
+        }
+        const payload: CreateInternationalInvestmentPayload = {
+          symbol: internationalForm.symbol,
+          security_name: internationalForm.securityName || null,
+          market: "US",
+          instrument_type: internationalForm.instrumentType,
+          goal_id: goalIds[index],
+          sector_option_id: internationalForm.sectorOptionId || null,
+          quantity: quantityToPayload(quantity, 6),
+          avg_price: internationalForm.avgPrice,
+          current_price: internationalForm.currentPrice || undefined
+        };
+        await api.createInternationalInvestment(token, payload);
+      }
+      setWorkspaceMessage(
+        usedExistingSiblings
+          ? `SIP added across ${goalIds.length} existing goals.`
+          : allocations.length > 1
+            ? `International investment saved across ${allocations.length} goals.`
+            : "International investment saved."
+      );
       setInternationalForm({
         symbol: "",
         securityName: "",
         instrumentType: "stock",
-        goalId: "",
+        goalAllocations: [],
         sectorOptionId: "",
         quantity: "",
         avgPrice: "",
@@ -1764,8 +2131,43 @@ function DashboardShell({
     optionId?: string | null,
     goalId?: string | null
   ) {
+    let editUnitsOrQuantity = unitsOrQuantity;
+    if (activeInvestmentTab === "Mutual Funds") {
+      const holding = mutualFundPortfolio?.holdings.find((entry) => entry.id === holdingId);
+      if (holding) {
+        const siblings = mutualFundGoalSiblings(mutualFundPortfolio?.holdings ?? [], holding.scheme_code);
+        if (siblings.length > 1) {
+          const totalUnits = siblings.reduce((sum, entry) => sum + entry.quantity, 0);
+          editUnitsOrQuantity = quantityToPayload(totalUnits, 3);
+        }
+      }
+    } else if (activeInvestmentTab === "Stocks") {
+      const holding = stockPortfolio?.holdings.find((entry) => entry.id === holdingId);
+      if (holding) {
+        const siblings = symbolGoalSiblings(stockPortfolio?.holdings ?? [], holding.symbol);
+        if (siblings.length > 1) {
+          const totalQuantity = siblings.reduce((sum, entry) => sum + entry.quantity, 0);
+          editUnitsOrQuantity = quantityToPayload(totalQuantity, 3);
+        }
+      }
+    } else if (activeInvestmentTab === "International Investment") {
+      const holding = internationalPortfolio?.holdings.find((entry) => entry.id === holdingId);
+      if (holding) {
+        const siblings = symbolGoalSiblings(internationalPortfolio?.holdings ?? [], holding.symbol);
+        if (siblings.length > 1) {
+          const totalQuantity = siblings.reduce((sum, entry) => sum + entry.quantity, 0);
+          editUnitsOrQuantity = quantityToPayload(totalQuantity, 6);
+        }
+      }
+    }
+
     setEditingHoldingId(holdingId);
-    setHoldingEditForm({ unitsOrQuantity, avgPrice, optionId: optionId ?? "", goalId: goalId ?? "" });
+    setHoldingEditForm({
+      unitsOrQuantity: editUnitsOrQuantity,
+      avgPrice,
+      optionId: optionId ?? "",
+      goalId: goalId ?? ""
+    });
     setWorkspaceError(null);
     setWorkspaceMessage(null);
   }
@@ -1780,34 +2182,174 @@ function DashboardShell({
     setWorkspaceMessage(null);
     try {
       if (activeInvestmentTab === "Mutual Funds") {
-        await api.updateMutualFundInvestment(token, editingHoldingId, {
-          units: holdingEditForm.unitsOrQuantity,
-          avg_price: holdingEditForm.avgPrice,
-          goal_id: holdingEditForm.goalId || null,
-          category_option_id: holdingEditForm.optionId || null
-        });
+        const holding = mutualFundPortfolio?.holdings.find((entry) => entry.id === editingHoldingId);
+        const siblings = holding
+          ? mutualFundGoalSiblings(mutualFundPortfolio?.holdings ?? [], holding.scheme_code)
+          : [];
+        const originalGoalId = holding?.goal_id ?? null;
+        const nextGoalId = holdingEditForm.goalId || null;
+        const shouldRedistribute =
+          siblings.length > 1 && (originalGoalId ?? "") === (nextGoalId ?? "");
+
+        if (shouldRedistribute) {
+          const newTotal = Number.parseFloat(holdingEditForm.unitsOrQuantity);
+          if (!Number.isFinite(newTotal) || newTotal <= 0) {
+            throw new Error("Enter a valid total units amount.");
+          }
+          const percents = proportionsFromQuantities(siblings.map((entry) => entry.quantity));
+          const unitShares = splitQuantityByPercents(newTotal, percents, 3);
+          for (let index = 0; index < siblings.length; index += 1) {
+            const sibling = siblings[index];
+            const units = unitShares[index] ?? 0;
+            if (!sibling || units <= 0) {
+              continue;
+            }
+            await api.updateMutualFundInvestment(token, sibling.id, {
+              units: quantityToPayload(units, 3),
+              avg_price: holdingEditForm.avgPrice,
+              goal_id: sibling.goal_id,
+              category_option_id: holdingEditForm.optionId || null
+            });
+          }
+          setWorkspaceMessage(`Holding updated across ${siblings.length} linked goals.`);
+        } else {
+          await api.updateMutualFundInvestment(token, editingHoldingId, {
+            units: holdingEditForm.unitsOrQuantity,
+            avg_price: holdingEditForm.avgPrice,
+            goal_id: nextGoalId,
+            category_option_id: holdingEditForm.optionId || null
+          });
+          setWorkspaceMessage("Holding updated.");
+        }
       } else if (activeInvestmentTab === "Stocks") {
-        await api.updateStockInvestment(token, editingHoldingId, {
-          quantity: holdingEditForm.unitsOrQuantity,
-          avg_price: holdingEditForm.avgPrice,
-          goal_id: holdingEditForm.goalId || null,
-          sector_option_id: holdingEditForm.optionId || null
-        });
+        const holding = stockPortfolio?.holdings.find((entry) => entry.id === editingHoldingId);
+        const siblings = holding ? symbolGoalSiblings(stockPortfolio?.holdings ?? [], holding.symbol) : [];
+        const originalGoalId = holding?.goal_id ?? null;
+        const nextGoalId = holdingEditForm.goalId || null;
+        const shouldRedistribute =
+          siblings.length > 1 && (originalGoalId ?? "") === (nextGoalId ?? "");
+
+        if (shouldRedistribute) {
+          const newTotal = Number.parseFloat(holdingEditForm.unitsOrQuantity);
+          if (!Number.isFinite(newTotal) || newTotal <= 0) {
+            throw new Error("Enter a valid total quantity.");
+          }
+          const percents = proportionsFromQuantities(siblings.map((entry) => entry.quantity));
+          const quantityShares = splitQuantityByPercents(newTotal, percents, 3);
+          for (let index = 0; index < siblings.length; index += 1) {
+            const sibling = siblings[index];
+            const quantity = quantityShares[index] ?? 0;
+            if (!sibling || quantity <= 0) {
+              continue;
+            }
+            await api.updateStockInvestment(token, sibling.id, {
+              quantity: quantityToPayload(quantity, 3),
+              avg_price: holdingEditForm.avgPrice,
+              goal_id: sibling.goal_id,
+              sector_option_id: holdingEditForm.optionId || null
+            });
+          }
+          setWorkspaceMessage(`Holding updated across ${siblings.length} linked goals.`);
+        } else {
+          await api.updateStockInvestment(token, editingHoldingId, {
+            quantity: holdingEditForm.unitsOrQuantity,
+            avg_price: holdingEditForm.avgPrice,
+            goal_id: nextGoalId,
+            sector_option_id: holdingEditForm.optionId || null
+          });
+          setWorkspaceMessage("Holding updated.");
+        }
       } else if (activeInvestmentTab === "International Investment") {
-        await api.updateInternationalInvestment(token, editingHoldingId, {
-          quantity: holdingEditForm.unitsOrQuantity,
-          avg_price: holdingEditForm.avgPrice,
-          goal_id: holdingEditForm.goalId || null,
-          sector_option_id: holdingEditForm.optionId || null
-        });
+        const holding = internationalPortfolio?.holdings.find((entry) => entry.id === editingHoldingId);
+        const siblings = holding
+          ? symbolGoalSiblings(internationalPortfolio?.holdings ?? [], holding.symbol)
+          : [];
+        const originalGoalId = holding?.goal_id ?? null;
+        const nextGoalId = holdingEditForm.goalId || null;
+        const shouldRedistribute =
+          siblings.length > 1 && (originalGoalId ?? "") === (nextGoalId ?? "");
+
+        if (shouldRedistribute) {
+          const newTotal = Number.parseFloat(holdingEditForm.unitsOrQuantity);
+          if (!Number.isFinite(newTotal) || newTotal <= 0) {
+            throw new Error("Enter a valid total quantity.");
+          }
+          const percents = proportionsFromQuantities(siblings.map((entry) => entry.quantity));
+          const quantityShares = splitQuantityByPercents(newTotal, percents, 6);
+          for (let index = 0; index < siblings.length; index += 1) {
+            const sibling = siblings[index];
+            const quantity = quantityShares[index] ?? 0;
+            if (!sibling || quantity <= 0) {
+              continue;
+            }
+            await api.updateInternationalInvestment(token, sibling.id, {
+              quantity: quantityToPayload(quantity, 6),
+              avg_price: holdingEditForm.avgPrice,
+              goal_id: sibling.goal_id,
+              sector_option_id: holdingEditForm.optionId || null
+            });
+          }
+          setWorkspaceMessage(`Holding updated across ${siblings.length} linked goals.`);
+        } else {
+          await api.updateInternationalInvestment(token, editingHoldingId, {
+            quantity: holdingEditForm.unitsOrQuantity,
+            avg_price: holdingEditForm.avgPrice,
+            goal_id: nextGoalId,
+            sector_option_id: holdingEditForm.optionId || null
+          });
+          setWorkspaceMessage("Holding updated.");
+        }
       }
-      setWorkspaceMessage("Holding updated.");
       setEditingHoldingId(null);
       await loadWorkspace({ showLoader: false });
     } catch (caught) {
-      setWorkspaceError(caught instanceof ApiError ? caught.message : "Unable to update holding.");
+      setWorkspaceError(
+        caught instanceof ApiError
+          ? caught.message
+          : caught instanceof Error
+            ? caught.message
+            : "Unable to update holding."
+      );
     } finally {
       setSavingHoldingEdit(false);
+    }
+  }
+
+  function requestDeleteHolding(
+    id: string,
+    label: string,
+    assetClass: "mutual_funds" | "stocks" | "international"
+  ) {
+    setHoldingPendingDelete({ id, label, assetClass });
+    setWorkspaceError(null);
+    setWorkspaceMessage(null);
+  }
+
+  async function confirmDeleteHolding() {
+    if (!holdingPendingDelete) {
+      return;
+    }
+    setDeletingHolding(true);
+    setWorkspaceError(null);
+    setWorkspaceMessage(null);
+    try {
+      if (holdingPendingDelete.assetClass === "mutual_funds") {
+        await api.deleteMutualFundInvestment(token, holdingPendingDelete.id);
+      } else if (holdingPendingDelete.assetClass === "stocks") {
+        await api.deleteStockInvestment(token, holdingPendingDelete.id);
+      } else {
+        await api.deleteInternationalInvestment(token, holdingPendingDelete.id);
+      }
+      if (editingHoldingId === holdingPendingDelete.id) {
+        setEditingHoldingId(null);
+      }
+      setHoldingPendingDelete(null);
+      setWorkspaceMessage("Holding deleted.");
+      await loadWorkspace({ showLoader: false });
+    } catch (caught) {
+      setWorkspaceError(caught instanceof ApiError ? caught.message : "Unable to delete holding.");
+    } finally {
+      setDeletingHolding(false);
     }
   }
 
@@ -1953,6 +2495,13 @@ function DashboardShell({
                 {netChangePercent}%
               </span>
             </div>
+          </article>
+          <article className="summary-card">
+            <p>Total Investment</p>
+            <div className="summary-card-value">
+              <strong>{formatCurrency(investmentsValue)}</strong>
+            </div>
+            <p className="summary-card-note">Mutual funds, stocks &amp; international</p>
           </article>
           <article className="summary-card">
             <p>Liquid Balance</p>
@@ -2504,7 +3053,7 @@ function DashboardShell({
       ${ANALYSIS_TAG_COLORS.Needs} 0% ${needsShare}%,
       ${ANALYSIS_TAG_COLORS.Wants} ${needsShare}% ${needsShare + wantsShare}%,
       ${ANALYSIS_TAG_COLORS.Investments} ${needsShare + wantsShare}% ${needsShare + wantsShare + investmentsShare}%,
-      #d7dde8 ${needsShare + wantsShare + investmentsShare}% 100%
+      #e5e5e5 ${needsShare + wantsShare + investmentsShare}% 100%
     )`;
     const analysisCenterValue =
       analysisDonutFocus === "untagged"
@@ -3002,13 +3551,13 @@ function DashboardShell({
         </div>
 
         <div className="data-list goal-scroll-list">
-          {goals.length === 0 ? (
+          {goalsByCompletion.length === 0 ? (
             <p>No goals yet. Add one above, or browse suggested goals.</p>
           ) : (
-            goals.slice(0, 4).map((goal) => {
+            goalsByCompletion.map((goal) => {
               const target = parseAmount(goal.target_amount);
               const current = parseAmount(goal.current_amount);
-              const progress = target > 0 ? Math.min(100, (current / target) * 100) : 0;
+              const progress = goalCompletionPercent(goal);
               const needed = Math.max(target - current, 0);
               return (
                 <article key={goal.id} className="data-row goal-row">
@@ -3209,6 +3758,7 @@ function DashboardShell({
               onClick={() => {
                 setActiveInvestmentTab(tabName);
                 setEditingHoldingId(null);
+                setHoldingPendingDelete(null);
               }}
             >
               {tabName}
@@ -3226,51 +3776,68 @@ function DashboardShell({
       const internationalCurrentInr = usdInrRate !== null ? internationalCurrentUsd * usdInrRate : 0;
       const internationalHoldings = internationalPortfolio?.holdings ?? [];
 
-      const mutualFundGoldInr = mutualFundHoldings
-        .filter((holding) => (holding.category_name ?? "").toLowerCase().includes("gold"))
-        .reduce((sum, holding) => sum + parseAmount(holding.current_value), 0);
-      const mutualFundInternationalInr = mutualFundHoldings
-        .filter((holding) => (holding.category_name ?? "").toLowerCase().includes("international"))
-        .reduce((sum, holding) => sum + parseAmount(holding.current_value), 0);
-      const mutualFundOtherInr = mutualFundHoldings
-        .filter((holding) => (holding.category_name ?? "").toLowerCase().includes("other"))
-        .reduce((sum, holding) => sum + parseAmount(holding.current_value), 0);
-      const mutualFundTotalInr = mutualFundHoldings.reduce(
-        (sum, holding) => sum + parseAmount(holding.current_value),
+      const mutualFundGoldInr = mutualFundHoldings.reduce(
+        (sum, holding) =>
+          isGoldLabeled(holding.category_name) ? sum + parseAmount(holding.current_value) : sum,
         0
       );
+      const stockGoldInr = stockHoldings.reduce(
+        (sum, holding) =>
+          isGoldLabeled(holding.sector_name) ? sum + parseAmount(holding.current_value) : sum,
+        0
+      );
+      const internationalGoldInr =
+        usdInrRate === null
+          ? 0
+          : internationalHoldings.reduce(
+              (sum, holding) =>
+                isGoldLabeled(holding.sector_name)
+                  ? sum + parseAmount(holding.current_value) * usdInrRate
+                  : sum,
+              0
+            );
+      const goldTotalInr = mutualFundGoldInr + stockGoldInr + internationalGoldInr;
 
-      const stockGoldInr = stockHoldings
-        .filter((holding) => (holding.sector_name ?? "").toLowerCase().includes("gold"))
-        .reduce((sum, holding) => sum + parseAmount(holding.current_value), 0);
-      const stockInternationalInr = stockHoldings
-        .filter((holding) => (holding.sector_name ?? "").toLowerCase().includes("international"))
-        .reduce((sum, holding) => sum + parseAmount(holding.current_value), 0);
-      const stockOtherInr = stockHoldings
-        .filter((holding) => (holding.sector_name ?? "").toLowerCase().includes("other"))
-        .reduce((sum, holding) => sum + parseAmount(holding.current_value), 0);
-      const stockTotalInr = stockHoldings.reduce((sum, holding) => sum + parseAmount(holding.current_value), 0);
+      const mutualFundTotalInr = mutualFundHoldings.reduce(
+        (sum, holding) =>
+          isGoldLabeled(holding.category_name) ? sum : sum + parseAmount(holding.current_value),
+        0
+      );
+      const stockTotalInr = stockHoldings.reduce(
+        (sum, holding) =>
+          isGoldLabeled(holding.sector_name) ? sum : sum + parseAmount(holding.current_value),
+        0
+      );
+      const internationalNonGoldInr = Math.max(0, internationalCurrentInr - internationalGoldInr);
 
-      const goldValueInr = mutualFundGoldInr + stockGoldInr;
-      const othersValueInr = mutualFundOtherInr + stockOtherInr;
-      const indianEquityInr =
-        Math.max(0, mutualFundTotalInr - mutualFundGoldInr - mutualFundInternationalInr - mutualFundOtherInr) +
-        Math.max(0, stockTotalInr - stockGoldInr - stockInternationalInr - stockOtherInr);
-
-      const allocationItems = [
-        { label: "Indian Equity", value: indianEquityInr, color: INVESTMENT_ALLOCATION_COLORS.indianEquity },
-        { label: "Gold", value: goldValueInr, color: INVESTMENT_ALLOCATION_COLORS.gold },
-        {
-          label: "International Investments",
-          value: internationalCurrentInr + mutualFundInternationalInr + stockInternationalInr,
-          color: INVESTMENT_ALLOCATION_COLORS.international
-        },
-        {
-          label: "Others",
-          value: othersValueInr,
-          color: INVESTMENT_ALLOCATION_COLORS.others
+      const transactionValueByAssetClass = Object.fromEntries(
+        TRANSACTION_ASSET_CLASSES.map((label) => [label, 0])
+      ) as Record<TransactionAssetClass, number>;
+      for (const transaction of transactions) {
+        if (transaction.transaction_type !== "INVESTMENT" || !transaction.category_id) {
+          continue;
         }
-      ];
+        const categoryName = investmentCategoryById[transaction.category_id];
+        if (categoryName && isTransactionAssetClass(categoryName)) {
+          transactionValueByAssetClass[categoryName] += parseAmount(transaction.amount);
+        }
+      }
+
+      const allocationItems = ASSET_CLASS_LABELS.map((label) => {
+        let value = 0;
+        if (label === "Mutual Funds") {
+          value = mutualFundTotalInr;
+        } else if (label === "Stocks") {
+          value = stockTotalInr;
+        } else if (label === "International Investment") {
+          value = internationalNonGoldInr;
+        } else if (label === "Gold") {
+          value = goldTotalInr;
+        } else if (isTransactionAssetClass(label)) {
+          value = transactionValueByAssetClass[label];
+        }
+        return { label, value, color: INVESTMENT_ALLOCATION_COLORS[label] };
+      });
       const allocationTotal = allocationItems.reduce((sum, item) => sum + item.value, 0);
       const focusedAllocation = allocationItems.find((item) => item.label === allocationFocus) ?? null;
       const allocationCenterValue = focusedAllocation?.value ?? allocationTotal;
@@ -3281,21 +3848,18 @@ function DashboardShell({
       type GoalAllocation = {
         goalId: string;
         goalName: string;
-        indianEquity: number;
-        gold: number;
-        international: number;
-        others: number;
+        byClass: Record<AssetClassLabel, number>;
       };
+
+      const emptyClassTotals = (): Record<AssetClassLabel, number> =>
+        Object.fromEntries(ASSET_CLASS_LABELS.map((label) => [label, 0])) as Record<AssetClassLabel, number>;
 
       const goalAllocationMap = new Map<string, GoalAllocation>();
       for (const goal of goals) {
         goalAllocationMap.set(goal.id, {
           goalId: goal.id,
           goalName: goal.name,
-          indianEquity: 0,
-          gold: 0,
-          international: 0,
-          others: 0
+          byClass: emptyClassTotals()
         });
       }
 
@@ -3307,86 +3871,184 @@ function DashboardShell({
         goalAllocationMap.set(unassignedGoalKey, {
           goalId: unassignedGoalKey,
           goalName: "No goal",
-          indianEquity: 0,
-          gold: 0,
-          international: 0,
-          others: 0
+          byClass: emptyClassTotals()
         });
       };
 
+      const addToGoalClass = (goalId: string | null | undefined, assetClass: AssetClassLabel, value: number) => {
+        if (value <= 0) {
+          return;
+        }
+        const key = goalId ?? unassignedGoalKey;
+        if (!goalId) {
+          ensureUnassignedBucket();
+        }
+        const bucket = goalAllocationMap.get(key);
+        if (!bucket) {
+          return;
+        }
+        bucket.byClass[assetClass] += value;
+      };
+
       for (const holding of mutualFundHoldings) {
-        const key = holding.goal_id ?? unassignedGoalKey;
-        if (!holding.goal_id) {
-          ensureUnassignedBucket();
-        }
-        const bucket = goalAllocationMap.get(key);
-        if (!bucket) {
-          continue;
-        }
         const value = parseAmount(holding.current_value);
-        const categoryName = (holding.category_name ?? "").toLowerCase();
-        const isGold = categoryName.includes("gold");
-        const isInternationalFund = categoryName.includes("international");
-        const isOther = categoryName.includes("other");
-        if (isGold) {
-          bucket.gold += value;
-        } else if (isInternationalFund) {
-          bucket.international += value;
-        } else if (isOther) {
-          bucket.others += value;
-        } else {
-          bucket.indianEquity += value;
-        }
+        addToGoalClass(
+          holding.goal_id,
+          isGoldLabeled(holding.category_name) ? "Gold" : "Mutual Funds",
+          value
+        );
       }
-
       for (const holding of stockHoldings) {
-        const key = holding.goal_id ?? unassignedGoalKey;
-        if (!holding.goal_id) {
-          ensureUnassignedBucket();
-        }
-        const bucket = goalAllocationMap.get(key);
-        if (!bucket) {
-          continue;
-        }
         const value = parseAmount(holding.current_value);
-        const sectorName = (holding.sector_name ?? "").toLowerCase();
-        const isGold = sectorName.includes("gold");
-        const isInternational = sectorName.includes("international");
-        const isOther = sectorName.includes("other");
-        if (isGold) {
-          bucket.gold += value;
-        } else if (isInternational) {
-          bucket.international += value;
-        } else if (isOther) {
-          bucket.others += value;
-        } else {
-          bucket.indianEquity += value;
-        }
+        addToGoalClass(holding.goal_id, isGoldLabeled(holding.sector_name) ? "Gold" : "Stocks", value);
       }
-
       for (const holding of internationalHoldings) {
-        const key = holding.goal_id ?? unassignedGoalKey;
-        if (!holding.goal_id) {
-          ensureUnassignedBucket();
-        }
-        const bucket = goalAllocationMap.get(key);
-        if (!bucket) {
-          continue;
-        }
         if (usdInrRate === null) {
           continue;
-        } else {
-          bucket.international += parseAmount(holding.current_value) * usdInrRate;
         }
+        const value = parseAmount(holding.current_value) * usdInrRate;
+        addToGoalClass(
+          holding.goal_id,
+          isGoldLabeled(holding.sector_name) ? "Gold" : "International Investment",
+          value
+        );
+      }
+      for (const transaction of transactions) {
+        if (transaction.transaction_type !== "INVESTMENT" || !transaction.category_id) {
+          continue;
+        }
+        const categoryName = investmentCategoryById[transaction.category_id];
+        if (!categoryName || !isTransactionAssetClass(categoryName)) {
+          continue;
+        }
+        addToGoalClass(
+          transaction.goal_id != null ? String(transaction.goal_id) : null,
+          categoryName,
+          parseAmount(transaction.amount)
+        );
       }
 
+      const goalProgressById = new Map(goals.map((goal) => [goal.id, goalCompletionPercent(goal)]));
       const goalAllocations = Array.from(goalAllocationMap.values())
         .map((entry) => {
-          const total = entry.indianEquity + entry.gold + entry.international + entry.others;
+          const total = ASSET_CLASS_LABELS.reduce((sum, label) => sum + entry.byClass[label], 0);
           return { ...entry, total };
         })
         .filter((entry) => entry.total > 0)
-        .sort((left, right) => right.total - left.total);
+        .sort((left, right) => {
+          const completionDelta =
+            (goalProgressById.get(right.goalId) ?? 0) - (goalProgressById.get(left.goalId) ?? 0);
+          if (completionDelta !== 0) {
+            return completionDelta;
+          }
+          return left.goalName.localeCompare(right.goalName);
+        });
+
+      type GoalLinkedHolding = {
+        id: string;
+        name: string;
+        assetClass: AssetClassLabel;
+        valueInr: number;
+      };
+
+      const matchesGoalId = (holdingGoalId: string | null | undefined, goalId: string) =>
+        goalId === unassignedGoalKey ? holdingGoalId == null : holdingGoalId === goalId;
+
+      const linkedHoldingsForGoal = (goalId: string, assetClassFilter: string | null): GoalLinkedHolding[] => {
+        const rows: GoalLinkedHolding[] = [];
+
+        for (const holding of mutualFundHoldings) {
+          if (!matchesGoalId(holding.goal_id, goalId)) {
+            continue;
+          }
+          const assetClass: AssetClassLabel = isGoldLabeled(holding.category_name)
+            ? "Gold"
+            : "Mutual Funds";
+          if (assetClassFilter && assetClass !== assetClassFilter) {
+            continue;
+          }
+          rows.push({
+            id: `mf-${holding.id}`,
+            name: holding.scheme_name,
+            assetClass,
+            valueInr: parseAmount(holding.current_value)
+          });
+        }
+
+        for (const holding of stockHoldings) {
+          if (!matchesGoalId(holding.goal_id, goalId)) {
+            continue;
+          }
+          const assetClass: AssetClassLabel = isGoldLabeled(holding.sector_name) ? "Gold" : "Stocks";
+          if (assetClassFilter && assetClass !== assetClassFilter) {
+            continue;
+          }
+          rows.push({
+            id: `stock-${holding.id}`,
+            name: holding.company_name?.trim() || holding.symbol,
+            assetClass,
+            valueInr: parseAmount(holding.current_value)
+          });
+        }
+
+        for (const holding of internationalHoldings) {
+          if (!matchesGoalId(holding.goal_id, goalId) || usdInrRate === null) {
+            continue;
+          }
+          const assetClass: AssetClassLabel = isGoldLabeled(holding.sector_name)
+            ? "Gold"
+            : "International Investment";
+          if (assetClassFilter && assetClass !== assetClassFilter) {
+            continue;
+          }
+          rows.push({
+            id: `intl-${holding.id}`,
+            name: holding.security_name?.trim() || holding.symbol,
+            assetClass,
+            valueInr: parseAmount(holding.current_value) * usdInrRate
+          });
+        }
+
+        for (const transaction of transactions) {
+          if (transaction.transaction_type !== "INVESTMENT" || !transaction.category_id) {
+            continue;
+          }
+          const categoryName = investmentCategoryById[transaction.category_id];
+          if (!categoryName || !isTransactionAssetClass(categoryName)) {
+            continue;
+          }
+          const transactionGoalId =
+            transaction.goal_id != null ? String(transaction.goal_id) : null;
+          if (!matchesGoalId(transactionGoalId, goalId)) {
+            continue;
+          }
+          if (assetClassFilter && categoryName !== assetClassFilter) {
+            continue;
+          }
+          rows.push({
+            id: `txn-${transaction.id}`,
+            name: transaction.merchant?.trim() || categoryName,
+            assetClass: categoryName,
+            valueInr: parseAmount(transaction.amount)
+          });
+        }
+
+        return rows.sort((left, right) => {
+          const classDelta =
+            ASSET_CLASS_LABELS.indexOf(left.assetClass) - ASSET_CLASS_LABELS.indexOf(right.assetClass);
+          if (classDelta !== 0) {
+            return classDelta;
+          }
+          return right.valueInr - left.valueInr;
+        });
+      };
+
+      const selectedGoalHoldings = goalAllocationFocus
+        ? linkedHoldingsForGoal(goalAllocationFocus.goalId, goalAllocationFocus.label)
+        : [];
+      const selectedGoalName =
+        goalAllocations.find((entry) => entry.goalId === goalAllocationFocus?.goalId)?.goalName ??
+        null;
 
       const mfInvested = parseAmount(mutualFundPortfolio?.total_invested_amount ?? "0");
       const mfCurrent = parseAmount(mutualFundPortfolio?.total_current_value ?? "0");
@@ -3395,8 +4057,12 @@ function DashboardShell({
       const internationalInvestedUsd = parseAmount(internationalPortfolio?.total_invested_amount ?? "0");
       const internationalInvestedInr =
         usdInrRate !== null ? internationalInvestedUsd * usdInrRate : 0;
-      const overallInvested = mfInvested + stockInvested + internationalInvestedInr;
-      const overallCurrent = mfCurrent + stockCurrent + internationalCurrentInr;
+      const transactionOnlyTotal = TRANSACTION_ASSET_CLASSES.reduce(
+        (sum, label) => sum + transactionValueByAssetClass[label],
+        0
+      );
+      const overallInvested = mfInvested + stockInvested + internationalInvestedInr + transactionOnlyTotal;
+      const overallCurrent = mfCurrent + stockCurrent + internationalCurrentInr + transactionOnlyTotal;
       const overallPnl = overallCurrent - overallInvested;
       const overallPnlPercent = overallInvested > 0 ? (overallPnl / overallInvested) * 100 : 0;
       const overallTone = pnlTone(overallPnl);
@@ -3447,31 +4113,33 @@ function DashboardShell({
                   />
                 </div>
                 <div className="investment-allocation-legend">
-                  {allocationItems.map((item) => {
-                    const share = allocationTotal > 0 ? (item.value / allocationTotal) * 100 : 0;
-                    const isActive = allocationFocus === item.label;
-                    return (
-                      <button
-                        key={item.label}
-                        type="button"
-                        data-allocation-interactive="true"
-                        className={`investment-allocation-row interactive-chart-row${isActive ? " active" : ""}${allocationFocus && !isActive ? " dimmed" : ""}`}
-                        onClick={() => {
-                          setGoalAllocationFocus(null);
-                          setAllocationFocus((current) => (current === item.label ? null : item.label));
-                        }}
-                      >
-                        <div className="investment-allocation-label">
-                          <span className="investment-allocation-dot" style={{ backgroundColor: item.color }} />
-                          <strong>{item.label}</strong>
-                        </div>
-                        <div className="investment-allocation-values">
-                          <span>{formatCurrency(item.value)}</span>
-                          <span>{share.toFixed(1)}%</span>
-                        </div>
-                      </button>
-                    );
-                  })}
+                  {(allocationTotal > 0 ? allocationItems.filter((item) => item.value > 0) : allocationItems).map(
+                    (item) => {
+                      const share = allocationTotal > 0 ? (item.value / allocationTotal) * 100 : 0;
+                      const isActive = allocationFocus === item.label;
+                      return (
+                        <button
+                          key={item.label}
+                          type="button"
+                          data-allocation-interactive="true"
+                          className={`investment-allocation-row interactive-chart-row${isActive ? " active" : ""}${allocationFocus && !isActive ? " dimmed" : ""}`}
+                          onClick={() => {
+                            setGoalAllocationFocus(null);
+                            setAllocationFocus((current) => (current === item.label ? null : item.label));
+                          }}
+                        >
+                          <div className="investment-allocation-label">
+                            <span className="investment-allocation-dot" style={{ backgroundColor: item.color }} />
+                            <strong>{item.label}</strong>
+                          </div>
+                          <div className="investment-allocation-values">
+                            <span>{formatCurrency(item.value)}</span>
+                            <span>{share.toFixed(1)}%</span>
+                          </div>
+                        </button>
+                      );
+                    }
+                  )}
                 </div>
                 {usdInrRate === null && internationalCurrentUsd > 0 && (
                   <p className="form-hint">USD/INR rate unavailable. International slice is temporarily excluded.</p>
@@ -3483,101 +4151,188 @@ function DashboardShell({
                 {goalAllocations.length === 0 ? (
                   <p className="form-hint">No goal-linked investments yet.</p>
                 ) : (
-                  <div className="investment-goal-card-grid">
-                    {goalAllocations.map((goalAllocation) => {
-                      const goalItems = [
-                        {
-                          label: "Indian Equity",
-                          value: goalAllocation.indianEquity,
-                          color: INVESTMENT_ALLOCATION_COLORS.indianEquity
-                        },
-                        {
-                          label: "Gold",
-                          value: goalAllocation.gold,
-                          color: INVESTMENT_ALLOCATION_COLORS.gold
-                        },
-                        {
-                          label: "International",
-                          value: goalAllocation.international,
-                          color: INVESTMENT_ALLOCATION_COLORS.international
-                        },
-                        {
-                          label: "Others",
-                          value: goalAllocation.others,
-                          color: INVESTMENT_ALLOCATION_COLORS.others
-                        }
-                      ];
-                      const activeGoalLabel =
-                        goalAllocationFocus?.goalId === goalAllocation.goalId
-                          ? goalAllocationFocus.label
+                  <>
+                    <div className="investment-goal-card-grid">
+                      {goalAllocations.map((goalAllocation) => {
+                        const goalItems = ASSET_CLASS_LABELS.map((label) => ({
+                          label,
+                          value: goalAllocation.byClass[label],
+                          color: INVESTMENT_ALLOCATION_COLORS[label]
+                        })).filter((item) => item.value > 0);
+                        const isGoalSelected = goalAllocationFocus?.goalId === goalAllocation.goalId;
+                        const activeGoalLabel = isGoalSelected ? goalAllocationFocus?.label ?? null : null;
+                        const focusedGoalItem = activeGoalLabel
+                          ? goalItems.find((item) => item.label === activeGoalLabel) ?? null
                           : null;
-                      const focusedGoalItem = activeGoalLabel
-                        ? goalItems.find((item) => item.label === activeGoalLabel) ?? null
-                        : null;
-                      return (
-                        <article key={goalAllocation.goalId} className="investment-goal-card">
-                          <div className="investment-goal-card-header">
-                            <strong>{goalAllocation.goalName}</strong>
-                            <span>
-                              {focusedGoalItem
-                                ? formatCurrency(focusedGoalItem.value)
-                                : formatCurrency(goalAllocation.total)}
-                            </span>
+                        return (
+                          <article
+                            key={goalAllocation.goalId}
+                            className={`investment-goal-card${isGoalSelected ? " selected" : ""}`}
+                            data-allocation-interactive="true"
+                            role="button"
+                            tabIndex={0}
+                            aria-pressed={isGoalSelected}
+                            aria-label={`Show investments linked to ${goalAllocation.goalName}`}
+                            onClick={() => {
+                              setAllocationFocus(null);
+                              setGoalAllocationFocus((current) =>
+                                current?.goalId === goalAllocation.goalId && current.label === null
+                                  ? null
+                                  : { goalId: goalAllocation.goalId, label: null }
+                              );
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key !== "Enter" && event.key !== " ") {
+                                return;
+                              }
+                              event.preventDefault();
+                              setAllocationFocus(null);
+                              setGoalAllocationFocus((current) =>
+                                current?.goalId === goalAllocation.goalId && current.label === null
+                                  ? null
+                                  : { goalId: goalAllocation.goalId, label: null }
+                              );
+                            }}
+                          >
+                            <div className="investment-goal-card-header">
+                              <strong>{goalAllocation.goalName}</strong>
+                              <span>
+                                {focusedGoalItem
+                                  ? formatCurrency(focusedGoalItem.value)
+                                  : formatCurrency(goalAllocation.total)}
+                              </span>
+                            </div>
+                            <div
+                              className="investment-goal-card-body"
+                              onClick={(event) => event.stopPropagation()}
+                              onKeyDown={(event) => event.stopPropagation()}
+                            >
+                              <AllocationDonutChart
+                                items={goalItems}
+                                activeLabel={activeGoalLabel}
+                                onSelect={(label) => {
+                                  setAllocationFocus(null);
+                                  setGoalAllocationFocus((current) =>
+                                    current?.goalId === goalAllocation.goalId && current.label === label
+                                      ? null
+                                      : { goalId: goalAllocation.goalId, label }
+                                  );
+                                }}
+                                size={148}
+                                explodeDistance={10}
+                                ariaLabel={`${goalAllocation.goalName} asset allocation`}
+                              />
+                              <div className="investment-goal-card-legend">
+                                {goalItems.map((item) => {
+                                  const share =
+                                    goalAllocation.total > 0
+                                      ? (item.value / goalAllocation.total) * 100
+                                      : 0;
+                                  const isActive = activeGoalLabel === item.label;
+                                  return (
+                                    <button
+                                      key={item.label}
+                                      type="button"
+                                      data-allocation-interactive="true"
+                                      className={`investment-goal-card-legend-row interactive-chart-row${isActive ? " active" : ""}${activeGoalLabel && !isActive ? " dimmed" : ""}`}
+                                      onClick={() => {
+                                        setAllocationFocus(null);
+                                        setGoalAllocationFocus((current) =>
+                                          current?.goalId === goalAllocation.goalId &&
+                                          current.label === item.label
+                                            ? null
+                                            : { goalId: goalAllocation.goalId, label: item.label }
+                                        );
+                                      }}
+                                    >
+                                      <div className="investment-allocation-label">
+                                        <span
+                                          className="investment-allocation-dot"
+                                          style={{ backgroundColor: item.color }}
+                                        />
+                                        <span>{item.label}</span>
+                                      </div>
+                                      <strong>{share.toFixed(1)}%</strong>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                    {goalAllocationFocus && selectedGoalName ? (
+                      <div
+                        className="modal-backdrop"
+                        role="presentation"
+                        data-allocation-interactive="true"
+                        onClick={() => setGoalAllocationFocus(null)}
+                      >
+                        <div
+                          className="transaction-modal investment-goal-holdings-modal"
+                          role="dialog"
+                          aria-modal="true"
+                          aria-label={`Investments linked to ${selectedGoalName}`}
+                          onClick={(event) => event.stopPropagation()}
+                        >
+                          <div className="modal-header">
+                            <div>
+                              <h2>{selectedGoalName}</h2>
+                              <p className="investment-goal-holdings-subtitle">
+                                {goalAllocationFocus.label
+                                  ? `${goalAllocationFocus.label} linked to this goal`
+                                  : "Investments linked to this goal"}
+                              </p>
+                            </div>
+                            <button
+                              className="subtle-action icon-action"
+                              type="button"
+                              aria-label="Close goal investments"
+                              onClick={() => setGoalAllocationFocus(null)}
+                            >
+                              <X size={14} />
+                            </button>
                           </div>
-                          <div className="investment-goal-card-body">
-                            <AllocationDonutChart
-                              items={goalItems}
-                              activeLabel={activeGoalLabel}
-                              onSelect={(label) => {
-                                setAllocationFocus(null);
-                                setGoalAllocationFocus((current) =>
-                                  current?.goalId === goalAllocation.goalId && current.label === label
-                                    ? null
-                                    : { goalId: goalAllocation.goalId, label }
+                          {selectedGoalHoldings.length === 0 ? (
+                            <p className="form-hint">No named holdings for this selection.</p>
+                          ) : (
+                            <div className="investment-goal-holdings-groups">
+                              {ASSET_CLASS_LABELS.map((assetClass) => {
+                                const holdings = selectedGoalHoldings.filter(
+                                  (holding) => holding.assetClass === assetClass
                                 );
-                              }}
-                              size={148}
-                              explodeDistance={10}
-                              ariaLabel={`${goalAllocation.goalName} asset allocation`}
-                            />
-                            <div className="investment-goal-card-legend">
-                              {goalItems.map((item) => {
-                                const share =
-                                  goalAllocation.total > 0 ? (item.value / goalAllocation.total) * 100 : 0;
-                                const isActive = activeGoalLabel === item.label;
+                                if (holdings.length === 0) {
+                                  return null;
+                                }
                                 return (
-                                  <button
-                                    key={item.label}
-                                    type="button"
-                                    data-allocation-interactive="true"
-                                    className={`investment-goal-card-legend-row interactive-chart-row${isActive ? " active" : ""}${activeGoalLabel && !isActive ? " dimmed" : ""}`}
-                                    onClick={() => {
-                                      setAllocationFocus(null);
-                                      setGoalAllocationFocus((current) =>
-                                        current?.goalId === goalAllocation.goalId &&
-                                        current.label === item.label
-                                          ? null
-                                          : { goalId: goalAllocation.goalId, label: item.label }
-                                      );
-                                    }}
-                                  >
-                                    <div className="investment-allocation-label">
+                                  <div key={assetClass} className="investment-goal-holdings-group">
+                                    <p className="investment-goal-holdings-group-title">
                                       <span
                                         className="investment-allocation-dot"
-                                        style={{ backgroundColor: item.color }}
+                                        style={{
+                                          backgroundColor: INVESTMENT_ALLOCATION_COLORS[assetClass]
+                                        }}
                                       />
-                                      <span>{item.label}</span>
-                                    </div>
-                                    <strong>{share.toFixed(1)}%</strong>
-                                  </button>
+                                      {assetClass}
+                                    </p>
+                                    <ul className="investment-goal-holdings-list">
+                                      {holdings.map((holding) => (
+                                        <li key={holding.id}>
+                                          <span title={holding.name}>{holding.name}</span>
+                                          <strong>{formatCurrency(holding.valueInr)}</strong>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  </div>
                                 );
                               })}
                             </div>
-                          </div>
-                        </article>
-                      );
-                    })}
-                  </div>
+                          )}
+                        </div>
+                      </div>
+                    ) : null}
+                  </>
                 )}
               </div>
             </section>
@@ -3639,6 +4394,17 @@ function DashboardShell({
       : isLatestNavFromToday
         ? "Updated today."
         : "Not updated today yet.";
+    const selectedMfSipSiblingCount = selectedMutualFund
+      ? mutualFundGoalSiblings(mutualFundPortfolio?.holdings ?? [], selectedMutualFund.scheme_code).length
+      : 0;
+    const selectedStockSipSiblingCount = stockForm.symbol.trim()
+      ? symbolGoalSiblings(stockPortfolio?.holdings ?? [], stockForm.symbol).length
+      : 0;
+    const selectedInternationalSipSiblingCount = internationalForm.symbol.trim()
+      ? symbolGoalSiblings(internationalPortfolio?.holdings ?? [], internationalForm.symbol).length
+      : 0;
+    const multiGoalSipHint =
+      "This holding is already split across goals. Leave goals empty and the new SIP units will use the same split.";
 
     return (
       <div className="investment-section-shell">
@@ -3656,118 +4422,133 @@ function DashboardShell({
 
         {isMutualFundsTab && (
           <>
-            <div className="investment-layout">
-              <form className="workspace-form investment-form" onSubmit={searchMutualFunds}>
-                <label>
-                  Search mutual fund
-                  <input
-                    placeholder="Try: axis, hdfc, nifty"
-                    value={mutualFundSearchQuery}
-                    onChange={(event) => setMutualFundSearchQuery(event.target.value)}
-                  />
-                </label>
-                <button className="subtle-action mf-search-button" type="submit" disabled={loadingMutualFundSearch}>
-                  {loadingMutualFundSearch && <Loader2 className="spin" size={16} />}
-                  {loadingMutualFundSearch ? "Searching" : "Search"}
-                </button>
-              </form>
+            <div className="portfolio-compose">
+              <div className="portfolio-compose-primary">
+                <div className="portfolio-compose-block">
+                  <p className="portfolio-compose-label">Find a fund</p>
+                  <form className="portfolio-search-form" onSubmit={searchMutualFunds}>
+                    <label>
+                      Search mutual fund
+                      <input
+                        placeholder="Try: axis, hdfc, nifty"
+                        value={mutualFundSearchQuery}
+                        onChange={(event) => setMutualFundSearchQuery(event.target.value)}
+                      />
+                    </label>
+                    <button className="subtle-action mf-search-button" type="submit" disabled={loadingMutualFundSearch}>
+                      {loadingMutualFundSearch && <Loader2 className="spin" size={16} />}
+                      {loadingMutualFundSearch ? "Searching" : "Search"}
+                    </button>
+                  </form>
 
-              {mutualFundSearchResults.length > 0 && (
-                <div className="data-list investment-search-results">
-                  {mutualFundSearchResults.slice(0, 8).map((result) => (
-                    <article key={result.scheme_code} className="data-row compact-selection-row">
-                      <div>
-                        <strong>{result.scheme_name}</strong>
-                        <p>
-                          Code: {result.scheme_code}
-                          {result.fund_house ? ` | ${result.fund_house}` : ""}
-                        </p>
-                        <p>
-                          Latest NAV: {result.nav !== null ? formatCurrency(parseAmount(result.nav)) : "N/A"}
-                          {" | "}
-                          Date: {formatOptionalDate(result.date)}
-                        </p>
-                      </div>
-                      <button className="subtle-action small-action" type="button" onClick={() => chooseMutualFund(result)}>
-                        Select
-                      </button>
-                    </article>
-                  ))}
+                  {mutualFundSearchResults.length > 0 && (
+                    <div className="data-list investment-search-results">
+                      {mutualFundSearchResults.slice(0, 8).map((result) => (
+                        <article key={result.scheme_code} className="data-row compact-selection-row">
+                          <div>
+                            <strong>{result.scheme_name}</strong>
+                            <p>
+                              Code: {result.scheme_code}
+                              {result.fund_house ? ` | ${result.fund_house}` : ""}
+                            </p>
+                            <p>
+                              Latest NAV: {result.nav !== null ? formatCurrency(parseAmount(result.nav)) : "N/A"}
+                              {" | "}
+                              Date: {formatOptionalDate(result.date)}
+                            </p>
+                          </div>
+                          <button className="subtle-action small-action" type="button" onClick={() => chooseMutualFund(result)}>
+                            Select
+                          </button>
+                        </article>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              )}
+
+                <form className="portfolio-compose-block portfolio-entry-form" onSubmit={submitMutualFundInvestment}>
+                  <p className="portfolio-compose-label">Add holding</p>
+                  {selectedMutualFund ? (
+                    <div className="selected-mf-block">
+                      <strong>{selectedMutualFund.scheme_name}</strong>
+                      <p>
+                        Code: {selectedMutualFund.scheme_code}
+                        {selectedMutualFund.fund_house ? ` | ${selectedMutualFund.fund_house}` : ""}
+                      </p>
+                      <p>
+                        Latest NAV:{" "}
+                        {selectedMutualFund.nav !== null ? formatCurrency(parseAmount(selectedMutualFund.nav)) : "N/A"}
+                        {" | "}
+                        Date: {formatOptionalDate(selectedMutualFund.date)}
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="form-hint">Search and select a fund to enable this form.</p>
+                  )}
+                  <div className="portfolio-entry-fields">
+                    <label>
+                      Category
+                      <select
+                        value={mutualFundForm.categoryOptionId}
+                        onChange={(event) => setMutualFundForm({ ...mutualFundForm, categoryOptionId: event.target.value })}
+                      >
+                        <option value="">No category</option>
+                        {investmentOptions.mutual_fund_categories.map((option) => (
+                          <option key={option.id} value={option.id}>
+                            {option.display_name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Units
+                      <input
+                        required
+                        min="0.001"
+                        step="0.001"
+                        type="number"
+                        value={mutualFundForm.units}
+                        onChange={(event) => setMutualFundForm({ ...mutualFundForm, units: event.target.value })}
+                      />
+                    </label>
+                    <label>
+                      Avg buy price
+                      <input
+                        required
+                        min="0.001"
+                        step="0.001"
+                        type="number"
+                        value={mutualFundForm.avgPrice}
+                        onChange={(event) => setMutualFundForm({ ...mutualFundForm, avgPrice: event.target.value })}
+                      />
+                    </label>
+                  </div>
+                  <button
+                    className="primary-action portfolio-entry-submit"
+                    disabled={savingMutualFundInvestment || !selectedMutualFund}
+                    type="submit"
+                  >
+                    {savingMutualFundInvestment && <Loader2 className="spin" size={16} />}
+                    {savingMutualFundInvestment ? "Saving" : "Add investment"}
+                  </button>
+                </form>
+              </div>
+
+              <aside className="portfolio-compose-aside">
+                <GoalAllocationPicker
+                  goals={goalsByCompletion}
+                  allocations={mutualFundForm.goalAllocations}
+                  onChange={(goalAllocations) => setMutualFundForm({ ...mutualFundForm, goalAllocations })}
+                  sipHint={
+                    selectedMfSipSiblingCount > 1 && mutualFundForm.goalAllocations.length === 0
+                      ? multiGoalSipHint
+                      : null
+                  }
+                />
+              </aside>
             </div>
 
-            <form className="workspace-form investment-form compact-investment-form" onSubmit={submitMutualFundInvestment}>
-              {selectedMutualFund && (
-                <div className="selected-mf-block">
-                  <strong>{selectedMutualFund.scheme_name}</strong>
-                  <p>
-                    Code: {selectedMutualFund.scheme_code}
-                    {selectedMutualFund.fund_house ? ` | ${selectedMutualFund.fund_house}` : ""}
-                  </p>
-                  <p>
-                    Latest NAV: {selectedMutualFund.nav !== null ? formatCurrency(parseAmount(selectedMutualFund.nav)) : "N/A"}
-                    {" | "}
-                    Date: {formatOptionalDate(selectedMutualFund.date)}
-                  </p>
-                </div>
-              )}
-              <div className="investment-inline-fields">
-                <label>
-                  Goal tag
-                  <select value={mutualFundForm.goalId} onChange={(event) => setMutualFundForm({ ...mutualFundForm, goalId: event.target.value })}>
-                    <option value="">No goal</option>
-                    {goals.map((goal) => (
-                      <option key={goal.id} value={goal.id}>
-                        {goal.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Category
-                  <select
-                    value={mutualFundForm.categoryOptionId}
-                    onChange={(event) => setMutualFundForm({ ...mutualFundForm, categoryOptionId: event.target.value })}
-                  >
-                    <option value="">No category</option>
-                    {investmentOptions.mutual_fund_categories.map((option) => (
-                      <option key={option.id} value={option.id}>
-                        {option.display_name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Units
-                  <input
-                    required
-                    min="0.001"
-                    step="0.001"
-                    type="number"
-                    value={mutualFundForm.units}
-                    onChange={(event) => setMutualFundForm({ ...mutualFundForm, units: event.target.value })}
-                  />
-                </label>
-                <label>
-                  Avg buy price
-                  <input
-                    required
-                    min="0.001"
-                    step="0.001"
-                    type="number"
-                    value={mutualFundForm.avgPrice}
-                    onChange={(event) => setMutualFundForm({ ...mutualFundForm, avgPrice: event.target.value })}
-                  />
-                </label>
-                <button className="primary-action" disabled={savingMutualFundInvestment || !selectedMutualFund} type="submit">
-                  {savingMutualFundInvestment && <Loader2 className="spin" size={16} />}
-                  {savingMutualFundInvestment ? "Saving" : "Add investment"}
-                </button>
-              </div>
-            </form>
-
-            <section className="dashboard-grid investment-summary-grid" aria-label="Investment summary">
+            <section className="dashboard-grid investment-summary-grid portfolio-summary-row" aria-label="Investment summary">
               <article>
                 <p>Total invested</p>
                 <strong>{formatCurrency(totalInvested)}</strong>
@@ -3803,7 +4584,7 @@ function DashboardShell({
                       <th>Abs. P&amp;L</th>
                       <th>Abs. P&amp;L %</th>
                       <th>Goal</th>
-                      <th>Edit</th>
+                      <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -3812,113 +4593,167 @@ function DashboardShell({
                       const pnlPercent = parseAmount(holding.pnl_percent);
                       const tone = pnlTone(pnlValue);
                       const isEditing = editingHoldingId === holding.id;
+                      const linkedShares = linkedGoalShares(
+                        mutualFundPortfolio.holdings
+                          .filter(
+                            (entry) => entry.scheme_code === holding.scheme_code && entry.goal_id != null
+                          )
+                          .map((entry) => ({
+                            goal_id: entry.goal_id,
+                            goal_name: entry.goal_name,
+                            quantity: parseAmount(entry.units)
+                          }))
+                      );
+                      const isMultiGoalLinked = linkedShares.length > 1;
+                      const isMultiGoalEdit = isEditing && isMultiGoalLinked;
                       return (
-                        <tr key={holding.id} className={`holding-row holding-row--${tone}`}>
-                          <td>{holding.scheme_code}</td>
-                          <td>
-                            {isEditing ? (
-                              <input
-                                className="table-edit-input"
-                                min="0.001"
-                                step="0.001"
-                                type="number"
-                                value={holdingEditForm.unitsOrQuantity}
-                                onChange={(event) => setHoldingEditForm({ ...holdingEditForm, unitsOrQuantity: event.target.value })}
-                              />
-                            ) : (
-                              holding.units
-                            )}
-                          </td>
-                          <td>
-                            {isEditing ? (
-                              <input
-                                className="table-edit-input"
-                                min="0.001"
-                                step="0.001"
-                                type="number"
-                                value={holdingEditForm.avgPrice}
-                                onChange={(event) => setHoldingEditForm({ ...holdingEditForm, avgPrice: event.target.value })}
-                              />
-                            ) : (
-                              holding.avg_price
-                            )}
-                          </td>
-                          <td>
-                            {isEditing ? (
-                              <select
-                                className="table-edit-input"
-                                value={holdingEditForm.optionId}
-                                onChange={(event) => setHoldingEditForm({ ...holdingEditForm, optionId: event.target.value })}
-                              >
-                                <option value="">No category</option>
-                                {investmentOptions.mutual_fund_categories.map((option) => (
-                                  <option key={option.id} value={option.id}>
-                                    {option.display_name}
-                                  </option>
-                                ))}
-                              </select>
-                            ) : (
-                              holding.category_name ?? "-"
-                            )}
-                          </td>
-                          <td title={holding.scheme_name} className="table-text-ellipsis">{holding.scheme_name}</td>
-                          <td>{holding.nav ?? "-"}</td>
-                          <td>{formatOptionalDate(holding.nav_date)}</td>
-                          <td>{formatCurrency(parseAmount(holding.invested_amount))}</td>
-                          <td>{formatCurrency(parseAmount(holding.current_value))}</td>
-                          <td>
-                            <span className={`pnl-chip pnl-chip--${tone}`}>{formatSignedCurrency(pnlValue)}</span>
-                          </td>
-                          <td>
-                            <span className={`pnl-chip pnl-chip--${tone}`}>{formatPnlPercent(pnlPercent)}</span>
-                          </td>
-                          <td>
-                            {isEditing ? (
-                              <select
-                                className="table-edit-input"
-                                value={holdingEditForm.goalId}
-                                onChange={(event) => setHoldingEditForm({ ...holdingEditForm, goalId: event.target.value })}
-                              >
-                                <option value="">No goal</option>
-                                {goals.map((goal) => (
-                                  <option key={goal.id} value={goal.id}>
-                                    {goal.name}
-                                  </option>
-                                ))}
-                              </select>
-                            ) : (
-                              holding.goal_name ?? "-"
-                            )}
-                          </td>
-                          <td>
-                            {isEditing ? (
-                              <form className="inline-actions holding-edit-actions" onSubmit={submitHoldingEdit}>
-                                <button className="subtle-action small-action" type="submit" disabled={savingHoldingEdit}>
-                                  {savingHoldingEdit ? "Saving" : "Save"}
-                                </button>
-                                <button className="subtle-action small-action" type="button" onClick={() => setEditingHoldingId(null)}>
-                                  Cancel
-                                </button>
-                              </form>
-                            ) : (
-                              <button
-                                className="subtle-action small-action"
-                                type="button"
-                                onClick={() =>
-                                  startEditHolding(
-                                    holding.id,
-                                    holding.units,
-                                    holding.avg_price,
-                                    holding.category_option_id,
-                                    holding.goal_id
-                                  )
-                                }
-                              >
-                                <Pencil size={14} />
-                              </button>
-                            )}
-                          </td>
-                        </tr>
+                        <Fragment key={holding.id}>
+                          <tr
+                            className={`holding-row holding-row--${tone}${isMultiGoalEdit ? " holding-row--editing-linked" : ""}`}
+                          >
+                            <td>{holding.scheme_code}</td>
+                            <td>
+                              {isEditing ? (
+                                <label className="table-edit-field">
+                                  {isMultiGoalEdit ? <span className="table-edit-field-label">Total units</span> : null}
+                                  <input
+                                    className="table-edit-input"
+                                    min="0.001"
+                                    step="0.001"
+                                    type="number"
+                                    value={holdingEditForm.unitsOrQuantity}
+                                    onChange={(event) =>
+                                      setHoldingEditForm({ ...holdingEditForm, unitsOrQuantity: event.target.value })
+                                    }
+                                  />
+                                </label>
+                              ) : (
+                                holding.units
+                              )}
+                            </td>
+                            <td>
+                              {isEditing ? (
+                                <input
+                                  className="table-edit-input"
+                                  min="0.001"
+                                  step="0.001"
+                                  type="number"
+                                  value={holdingEditForm.avgPrice}
+                                  onChange={(event) => setHoldingEditForm({ ...holdingEditForm, avgPrice: event.target.value })}
+                                />
+                              ) : (
+                                holding.avg_price
+                              )}
+                            </td>
+                            <td>
+                              {isEditing ? (
+                                <select
+                                  className="table-edit-input"
+                                  value={holdingEditForm.optionId}
+                                  onChange={(event) => setHoldingEditForm({ ...holdingEditForm, optionId: event.target.value })}
+                                >
+                                  <option value="">No category</option>
+                                  {investmentOptions.mutual_fund_categories.map((option) => (
+                                    <option key={option.id} value={option.id}>
+                                      {option.display_name}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : (
+                                holding.category_name ?? "-"
+                              )}
+                            </td>
+                            <td title={holding.scheme_name} className="table-text-ellipsis">{holding.scheme_name}</td>
+                            <td>{holding.nav ?? "-"}</td>
+                            <td>{formatOptionalDate(holding.nav_date)}</td>
+                            <td>{formatCurrency(parseAmount(holding.invested_amount))}</td>
+                            <td>{formatCurrency(parseAmount(holding.current_value))}</td>
+                            <td>
+                              <span className={`pnl-chip pnl-chip--${tone}`}>{formatSignedCurrency(pnlValue)}</span>
+                            </td>
+                            <td>
+                              <span className={`pnl-chip pnl-chip--${tone}`}>{formatPnlPercent(pnlPercent)}</span>
+                            </td>
+                            <td>
+                              {isMultiGoalEdit ? (
+                                <LinkedGoalsCell shares={linkedShares} />
+                              ) : isEditing ? (
+                                <select
+                                  className="table-edit-input"
+                                  value={holdingEditForm.goalId}
+                                  onChange={(event) => setHoldingEditForm({ ...holdingEditForm, goalId: event.target.value })}
+                                >
+                                  <option value="">No goal</option>
+                                  {goalsByCompletion.map((goal) => (
+                                    <option key={goal.id} value={goal.id}>
+                                      {goal.name}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : isMultiGoalLinked ? (
+                                <span className="goal-shared-label" title={linkedShares.map((share) => share.goalName).join(", ")}>
+                                  {holding.goal_name ?? "Goal"}
+                                  <span className="goal-shared-badge">shared</span>
+                                </span>
+                              ) : (
+                                holding.goal_name ?? "-"
+                              )}
+                            </td>
+                            <td>
+                              {isEditing ? (
+                                <form className="holding-edit-actions" onSubmit={submitHoldingEdit}>
+                                  <div className="inline-actions">
+                                    <button className="subtle-action small-action" type="submit" disabled={savingHoldingEdit}>
+                                      {savingHoldingEdit ? "Saving" : "Save"}
+                                    </button>
+                                    <button className="subtle-action small-action" type="button" onClick={() => setEditingHoldingId(null)}>
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </form>
+                              ) : (
+                                <div className="inline-actions holding-row-actions">
+                                  <button
+                                    className="subtle-action small-action icon-action"
+                                    type="button"
+                                    aria-label={`Edit ${holding.scheme_name}`}
+                                    title="Edit"
+                                    onClick={() =>
+                                      startEditHolding(
+                                        holding.id,
+                                        holding.units,
+                                        holding.avg_price,
+                                        holding.category_option_id,
+                                        holding.goal_id
+                                      )
+                                    }
+                                  >
+                                    <Pencil size={14} />
+                                  </button>
+                                  <button
+                                    className="subtle-action small-action icon-action danger-action"
+                                    type="button"
+                                    aria-label={`Delete ${holding.scheme_name}`}
+                                    title="Delete"
+                                    onClick={() =>
+                                      requestDeleteHolding(holding.id, holding.scheme_name, "mutual_funds")
+                                    }
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                          {isMultiGoalEdit ? (
+                            <tr className="holding-edit-banner-row">
+                              <td colSpan={13}>
+                                Editing total units for this fund. On save, units are split across{" "}
+                                {linkedShares.map((share) => share.goalName).join(", ")} using the current percentages.
+                              </td>
+                            </tr>
+                          ) : null}
+                        </Fragment>
                       );
                     })}
                   </tbody>
@@ -3930,77 +4765,87 @@ function DashboardShell({
 
         {isStocksTab && (
           <>
-            <form className="workspace-form investment-form compact-investment-form" onSubmit={submitStockInvestment}>
-              <label>
-                Symbol
-                <input required value={stockForm.symbol} onChange={(event) => setStockForm({ ...stockForm, symbol: event.target.value })} />
-              </label>
-              <label>
-                Company name
-                <input value={stockForm.companyName} onChange={(event) => setStockForm({ ...stockForm, companyName: event.target.value })} />
-              </label>
-              <label>
-                Exchange
-                <input placeholder="NSE, BSE" value={stockForm.exchange} onChange={(event) => setStockForm({ ...stockForm, exchange: event.target.value })} />
-              </label>
-              <div className="investment-inline-fields stock-inline-fields">
-                <label>
-                  Goal tag
-                  <select value={stockForm.goalId} onChange={(event) => setStockForm({ ...stockForm, goalId: event.target.value })}>
-                    <option value="">No goal</option>
-                    {goals.map((goal) => (
-                      <option key={goal.id} value={goal.id}>
-                        {goal.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Sector
-                  <select
-                    value={stockForm.sectorOptionId}
-                    onChange={(event) => setStockForm({ ...stockForm, sectorOptionId: event.target.value })}
-                  >
-                    <option value="">No sector</option>
-                    {investmentOptions.stock_sectors.map((option) => (
-                      <option key={option.id} value={option.id}>
-                        {option.display_name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Quantity
-                  <input required min="0.001" step="0.001" type="number" value={stockForm.quantity} onChange={(event) => setStockForm({ ...stockForm, quantity: event.target.value })} />
-                </label>
-                <label>
-                  Avg buy price
-                  <input required min="0.001" step="0.001" type="number" value={stockForm.avgPrice} onChange={(event) => setStockForm({ ...stockForm, avgPrice: event.target.value })} />
-                </label>
-                <label>
-                  Current price
-                  <div className="inline-actions">
-                    <input
-                      required
-                      min="0.001"
-                      step="0.001"
-                      type="number"
-                      value={stockForm.currentPrice}
-                      onChange={(event) => setStockForm({ ...stockForm, currentPrice: event.target.value })}
-                    />
-                    <button className="subtle-action small-action" type="button" disabled={loadingStockPrice} onClick={() => void fetchStockCurrentPrice()}>
-                      {loadingStockPrice && <Loader2 className="spin" size={14} />}
-                      {loadingStockPrice ? "Fetching" : "Auto"}
-                    </button>
+            <div className="portfolio-compose">
+              <div className="portfolio-compose-primary">
+                <form className="portfolio-compose-block portfolio-entry-form" onSubmit={submitStockInvestment}>
+                  <p className="portfolio-compose-label">Add holding</p>
+                  <div className="portfolio-entry-fields portfolio-entry-fields--3">
+                    <label>
+                      Symbol
+                      <input required value={stockForm.symbol} onChange={(event) => setStockForm({ ...stockForm, symbol: event.target.value })} />
+                    </label>
+                    <label>
+                      Company name
+                      <input value={stockForm.companyName} onChange={(event) => setStockForm({ ...stockForm, companyName: event.target.value })} />
+                    </label>
+                    <label>
+                      Exchange
+                      <input placeholder="NSE, BSE" value={stockForm.exchange} onChange={(event) => setStockForm({ ...stockForm, exchange: event.target.value })} />
+                    </label>
                   </div>
-                </label>
-                <button className="primary-action" disabled={savingStockInvestment} type="submit">
-                  {savingStockInvestment && <Loader2 className="spin" size={16} />}
-                  {savingStockInvestment ? "Saving" : "Add stock"}
-                </button>
+                  <div className="portfolio-entry-fields portfolio-entry-fields--4">
+                    <label>
+                      Sector
+                      <select
+                        value={stockForm.sectorOptionId}
+                        onChange={(event) => setStockForm({ ...stockForm, sectorOptionId: event.target.value })}
+                      >
+                        <option value="">No sector</option>
+                        {investmentOptions.stock_sectors.map((option) => (
+                          <option key={option.id} value={option.id}>
+                            {option.display_name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Quantity
+                      <input required min="0.001" step="0.001" type="number" value={stockForm.quantity} onChange={(event) => setStockForm({ ...stockForm, quantity: event.target.value })} />
+                    </label>
+                    <label>
+                      Avg buy price
+                      <input required min="0.001" step="0.001" type="number" value={stockForm.avgPrice} onChange={(event) => setStockForm({ ...stockForm, avgPrice: event.target.value })} />
+                    </label>
+                    <label>
+                      Current price
+                      <div className="inline-actions">
+                        <input
+                          required
+                          min="0.001"
+                          step="0.001"
+                          type="number"
+                          value={stockForm.currentPrice}
+                          onChange={(event) => setStockForm({ ...stockForm, currentPrice: event.target.value })}
+                        />
+                        <button className="subtle-action small-action" type="button" disabled={loadingStockPrice} onClick={() => void fetchStockCurrentPrice()}>
+                          {loadingStockPrice && <Loader2 className="spin" size={14} />}
+                          {loadingStockPrice ? "Fetching" : "Auto"}
+                        </button>
+                      </div>
+                    </label>
+                  </div>
+                  <button className="primary-action portfolio-entry-submit" disabled={savingStockInvestment} type="submit">
+                    {savingStockInvestment && <Loader2 className="spin" size={16} />}
+                    {savingStockInvestment ? "Saving" : "Add stock"}
+                  </button>
+                </form>
               </div>
-            </form>
-            <section className="dashboard-grid investment-summary-grid" aria-label="Investment summary">
+
+              <aside className="portfolio-compose-aside">
+                <GoalAllocationPicker
+                  goals={goalsByCompletion}
+                  allocations={stockForm.goalAllocations}
+                  onChange={(goalAllocations) => setStockForm({ ...stockForm, goalAllocations })}
+                  sipHint={
+                    selectedStockSipSiblingCount > 1 && stockForm.goalAllocations.length === 0
+                      ? multiGoalSipHint
+                      : null
+                  }
+                />
+              </aside>
+            </div>
+
+            <section className="dashboard-grid investment-summary-grid portfolio-summary-row" aria-label="Investment summary">
               <article>
                 <p>Total invested</p>
                 <strong>{formatCurrency(totalInvested)}</strong>
@@ -4016,6 +4861,7 @@ function DashboardShell({
                 </strong>
               </article>
             </section>
+
             <div className="table-wrapper">
               {!stockPortfolio || stockPortfolio.holdings.length === 0 ? (
                 <p>No stock holdings yet.</p>
@@ -4034,7 +4880,7 @@ function DashboardShell({
                       <th>Abs P&amp;L</th>
                       <th>Abs.P&amp;L %</th>
                       <th>Goal</th>
-                      <th>Edit</th>
+                      <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -4043,114 +4889,174 @@ function DashboardShell({
                       const pnlPercent = parseAmount(holding.pnl_percent);
                       const tone = pnlTone(pnlValue);
                       const isEditing = editingHoldingId === holding.id;
+                      const linkedShares = linkedGoalShares(
+                        stockPortfolio.holdings
+                          .filter(
+                            (entry) =>
+                              entry.symbol.trim().toUpperCase() === holding.symbol.trim().toUpperCase() &&
+                              entry.goal_id != null
+                          )
+                          .map((entry) => ({
+                            goal_id: entry.goal_id,
+                            goal_name: entry.goal_name,
+                            quantity: parseAmount(entry.quantity)
+                          }))
+                      );
+                      const isMultiGoalLinked = linkedShares.length > 1;
+                      const isMultiGoalEdit = isEditing && isMultiGoalLinked;
                       return (
-                        <tr key={holding.id} className={`holding-row holding-row--${tone}`}>
-                          <td>{holding.symbol}</td>
-                          <td>
-                            {isEditing ? (
-                              <input
-                                className="table-edit-input"
-                                min="0.001"
-                                step="0.001"
-                                type="number"
-                                value={holdingEditForm.unitsOrQuantity}
-                                onChange={(event) => setHoldingEditForm({ ...holdingEditForm, unitsOrQuantity: event.target.value })}
-                              />
-                            ) : (
-                              holding.quantity
-                            )}
-                          </td>
-                          <td>
-                            {isEditing ? (
-                              <input
-                                className="table-edit-input"
-                                min="0.001"
-                                step="0.001"
-                                type="number"
-                                value={holdingEditForm.avgPrice}
-                                onChange={(event) => setHoldingEditForm({ ...holdingEditForm, avgPrice: event.target.value })}
-                              />
-                            ) : (
-                              holding.avg_price
-                            )}
-                          </td>
-                          <td>
-                            {isEditing ? (
-                              <select
-                                className="table-edit-input"
-                                value={holdingEditForm.optionId}
-                                onChange={(event) => setHoldingEditForm({ ...holdingEditForm, optionId: event.target.value })}
-                              >
-                                <option value="">No sector</option>
-                                {investmentOptions.stock_sectors.map((option) => (
-                                  <option key={option.id} value={option.id}>
-                                    {option.display_name}
-                                  </option>
-                                ))}
-                              </select>
-                            ) : (
-                              holding.sector_name ?? "-"
-                            )}
-                          </td>
-                          <td title={holding.company_name ?? "Stock"} className="table-text-ellipsis">
-                            {holding.company_name ?? "Stock"}
-                          </td>
-                          <td>{holding.current_price}</td>
-                          <td>{formatCurrency(parseAmount(holding.invested_amount))}</td>
-                          <td>{formatCurrency(parseAmount(holding.current_value))}</td>
-                          <td>
-                            <span className={`pnl-chip pnl-chip--${tone}`}>{formatSignedCurrency(pnlValue)}</span>
-                          </td>
-                          <td>
-                            <span className={`pnl-chip pnl-chip--${tone}`}>{formatPnlPercent(pnlPercent)}</span>
-                          </td>
-                          <td>
-                            {isEditing ? (
-                              <select
-                                className="table-edit-input"
-                                value={holdingEditForm.goalId}
-                                onChange={(event) => setHoldingEditForm({ ...holdingEditForm, goalId: event.target.value })}
-                              >
-                                <option value="">No goal</option>
-                                {goals.map((goal) => (
-                                  <option key={goal.id} value={goal.id}>
-                                    {goal.name}
-                                  </option>
-                                ))}
-                              </select>
-                            ) : (
-                              holding.goal_name ?? "-"
-                            )}
-                          </td>
-                          <td>
-                            {isEditing ? (
-                              <form className="inline-actions holding-edit-actions" onSubmit={submitHoldingEdit}>
-                                <button className="subtle-action small-action" type="submit" disabled={savingHoldingEdit}>
-                                  {savingHoldingEdit ? "Saving" : "Save"}
-                                </button>
-                                <button className="subtle-action small-action" type="button" onClick={() => setEditingHoldingId(null)}>
-                                  Cancel
-                                </button>
-                              </form>
-                            ) : (
-                              <button
-                                className="subtle-action small-action"
-                                type="button"
-                                onClick={() =>
-                                  startEditHolding(
-                                    holding.id,
-                                    holding.quantity,
-                                    holding.avg_price,
-                                    holding.sector_option_id,
-                                    holding.goal_id
-                                  )
-                                }
-                              >
-                                <Pencil size={14} />
-                              </button>
-                            )}
-                          </td>
-                        </tr>
+                        <Fragment key={holding.id}>
+                          <tr
+                            className={`holding-row holding-row--${tone}${isMultiGoalEdit ? " holding-row--editing-linked" : ""}`}
+                          >
+                            <td>{holding.symbol}</td>
+                            <td>
+                              {isEditing ? (
+                                <label className="table-edit-field">
+                                  {isMultiGoalEdit ? <span className="table-edit-field-label">Total qty</span> : null}
+                                  <input
+                                    className="table-edit-input"
+                                    min="0.001"
+                                    step="0.001"
+                                    type="number"
+                                    value={holdingEditForm.unitsOrQuantity}
+                                    onChange={(event) =>
+                                      setHoldingEditForm({ ...holdingEditForm, unitsOrQuantity: event.target.value })
+                                    }
+                                  />
+                                </label>
+                              ) : (
+                                holding.quantity
+                              )}
+                            </td>
+                            <td>
+                              {isEditing ? (
+                                <input
+                                  className="table-edit-input"
+                                  min="0.001"
+                                  step="0.001"
+                                  type="number"
+                                  value={holdingEditForm.avgPrice}
+                                  onChange={(event) => setHoldingEditForm({ ...holdingEditForm, avgPrice: event.target.value })}
+                                />
+                              ) : (
+                                holding.avg_price
+                              )}
+                            </td>
+                            <td>
+                              {isEditing ? (
+                                <select
+                                  className="table-edit-input"
+                                  value={holdingEditForm.optionId}
+                                  onChange={(event) => setHoldingEditForm({ ...holdingEditForm, optionId: event.target.value })}
+                                >
+                                  <option value="">No sector</option>
+                                  {investmentOptions.stock_sectors.map((option) => (
+                                    <option key={option.id} value={option.id}>
+                                      {option.display_name}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : (
+                                holding.sector_name ?? "-"
+                              )}
+                            </td>
+                            <td title={holding.company_name ?? "Stock"} className="table-text-ellipsis">
+                              {holding.company_name ?? "Stock"}
+                            </td>
+                            <td>{holding.current_price}</td>
+                            <td>{formatCurrency(parseAmount(holding.invested_amount))}</td>
+                            <td>{formatCurrency(parseAmount(holding.current_value))}</td>
+                            <td>
+                              <span className={`pnl-chip pnl-chip--${tone}`}>{formatSignedCurrency(pnlValue)}</span>
+                            </td>
+                            <td>
+                              <span className={`pnl-chip pnl-chip--${tone}`}>{formatPnlPercent(pnlPercent)}</span>
+                            </td>
+                            <td>
+                              {isMultiGoalEdit ? (
+                                <LinkedGoalsCell shares={linkedShares} />
+                              ) : isEditing ? (
+                                <select
+                                  className="table-edit-input"
+                                  value={holdingEditForm.goalId}
+                                  onChange={(event) => setHoldingEditForm({ ...holdingEditForm, goalId: event.target.value })}
+                                >
+                                  <option value="">No goal</option>
+                                  {goalsByCompletion.map((goal) => (
+                                    <option key={goal.id} value={goal.id}>
+                                      {goal.name}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : isMultiGoalLinked ? (
+                                <span className="goal-shared-label" title={linkedShares.map((share) => share.goalName).join(", ")}>
+                                  {holding.goal_name ?? "Goal"}
+                                  <span className="goal-shared-badge">shared</span>
+                                </span>
+                              ) : (
+                                holding.goal_name ?? "-"
+                              )}
+                            </td>
+                            <td>
+                              {isEditing ? (
+                                <form className="holding-edit-actions" onSubmit={submitHoldingEdit}>
+                                  <div className="inline-actions">
+                                    <button className="subtle-action small-action" type="submit" disabled={savingHoldingEdit}>
+                                      {savingHoldingEdit ? "Saving" : "Save"}
+                                    </button>
+                                    <button className="subtle-action small-action" type="button" onClick={() => setEditingHoldingId(null)}>
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </form>
+                              ) : (
+                                <div className="inline-actions holding-row-actions">
+                                  <button
+                                    className="subtle-action small-action icon-action"
+                                    type="button"
+                                    aria-label={`Edit ${holding.company_name ?? holding.symbol}`}
+                                    title="Edit"
+                                    onClick={() =>
+                                      startEditHolding(
+                                        holding.id,
+                                        holding.quantity,
+                                        holding.avg_price,
+                                        holding.sector_option_id,
+                                        holding.goal_id
+                                      )
+                                    }
+                                  >
+                                    <Pencil size={14} />
+                                  </button>
+                                  <button
+                                    className="subtle-action small-action icon-action danger-action"
+                                    type="button"
+                                    aria-label={`Delete ${holding.company_name ?? holding.symbol}`}
+                                    title="Delete"
+                                    onClick={() =>
+                                      requestDeleteHolding(
+                                        holding.id,
+                                        holding.company_name ?? holding.symbol,
+                                        "stocks"
+                                      )
+                                    }
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                          {isMultiGoalEdit ? (
+                            <tr className="holding-edit-banner-row">
+                              <td colSpan={12}>
+                                Editing total quantity for this stock. On save, quantity is split across{" "}
+                                {linkedShares.map((share) => share.goalName).join(", ")} using the current percentages.
+                              </td>
+                            </tr>
+                          ) : null}
+                        </Fragment>
                       );
                     })}
                   </tbody>
@@ -4162,108 +5068,121 @@ function DashboardShell({
 
         {isInternationalTab && (
           <>
-            <form className="workspace-form investment-form compact-investment-form" onSubmit={submitInternationalInvestment}>
-              <label>
-                Symbol
-                <input
-                  required
-                  placeholder="AAPL, MSFT, ^GSPC, ^NDX"
-                  value={internationalForm.symbol}
-                  onChange={(event) => setInternationalForm({ ...internationalForm, symbol: event.target.value })}
-                />
-              </label>
-              <label>
-                Security name
-                <input
-                  value={internationalForm.securityName}
-                  onChange={(event) => setInternationalForm({ ...internationalForm, securityName: event.target.value })}
-                />
-              </label>
-              <label>
-                Type
-                <select
-                  value={internationalForm.instrumentType}
-                  onChange={(event) =>
-                    setInternationalForm({ ...internationalForm, instrumentType: event.target.value as "stock" | "index" })
-                  }
-                >
-                  <option value="stock">US Stock</option>
-                  <option value="index">US Index</option>
-                </select>
-              </label>
-              <div className="investment-inline-fields stock-inline-fields">
-                <label>
-                  Goal tag
-                  <select value={internationalForm.goalId} onChange={(event) => setInternationalForm({ ...internationalForm, goalId: event.target.value })}>
-                    <option value="">No goal</option>
-                    {goals.map((goal) => (
-                      <option key={goal.id} value={goal.id}>
-                        {goal.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Sector
-                  <select
-                    value={internationalForm.sectorOptionId}
-                    onChange={(event) => setInternationalForm({ ...internationalForm, sectorOptionId: event.target.value })}
-                  >
-                    <option value="">No sector</option>
-                    {investmentOptions.international_sectors.map((option) => (
-                      <option key={option.id} value={option.id}>
-                        {option.display_name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Quantity
-                  <input
-                    required
-                    min="0.000001"
-                    step="0.000001"
-                    type="number"
-                    value={internationalForm.quantity}
-                    onChange={(event) => setInternationalForm({ ...internationalForm, quantity: event.target.value })}
-                  />
-                </label>
-                <label>
-                  Avg buy price
-                  <input
-                    required
-                    min="0.001"
-                    step="0.001"
-                    type="number"
-                    value={internationalForm.avgPrice}
-                    onChange={(event) => setInternationalForm({ ...internationalForm, avgPrice: event.target.value })}
-                  />
-                </label>
-                <label>
-                  Current price
-                  <div className="inline-actions">
-                    <input
-                      required
-                      min="0.001"
-                      step="0.001"
-                      type="number"
-                      value={internationalForm.currentPrice}
-                      onChange={(event) => setInternationalForm({ ...internationalForm, currentPrice: event.target.value })}
-                    />
-                    <button className="subtle-action small-action" type="button" disabled={loadingInternationalPrice} onClick={() => void fetchInternationalCurrentPrice()}>
-                      {loadingInternationalPrice && <Loader2 className="spin" size={14} />}
-                      {loadingInternationalPrice ? "Fetching" : "Auto"}
-                    </button>
+            <div className="portfolio-compose">
+              <div className="portfolio-compose-primary">
+                <form className="portfolio-compose-block portfolio-entry-form" onSubmit={submitInternationalInvestment}>
+                  <p className="portfolio-compose-label">Add holding</p>
+                  <div className="portfolio-entry-fields portfolio-entry-fields--3">
+                    <label>
+                      Symbol
+                      <input
+                        required
+                        placeholder="AAPL, MSFT, ^GSPC, ^NDX"
+                        value={internationalForm.symbol}
+                        onChange={(event) => setInternationalForm({ ...internationalForm, symbol: event.target.value })}
+                      />
+                    </label>
+                    <label>
+                      Security name
+                      <input
+                        value={internationalForm.securityName}
+                        onChange={(event) => setInternationalForm({ ...internationalForm, securityName: event.target.value })}
+                      />
+                    </label>
+                    <label>
+                      Type
+                      <select
+                        value={internationalForm.instrumentType}
+                        onChange={(event) =>
+                          setInternationalForm({ ...internationalForm, instrumentType: event.target.value as "stock" | "index" })
+                        }
+                      >
+                        <option value="stock">US Stock</option>
+                        <option value="index">US Index</option>
+                      </select>
+                    </label>
                   </div>
-                </label>
-                <button className="primary-action" disabled={savingInternationalInvestment} type="submit">
-                  {savingInternationalInvestment && <Loader2 className="spin" size={16} />}
-                  {savingInternationalInvestment ? "Saving" : "Add international"}
-                </button>
+                  <div className="portfolio-entry-fields portfolio-entry-fields--4">
+                    <label>
+                      Sector
+                      <select
+                        value={internationalForm.sectorOptionId}
+                        onChange={(event) => setInternationalForm({ ...internationalForm, sectorOptionId: event.target.value })}
+                      >
+                        <option value="">No sector</option>
+                        {investmentOptions.international_sectors.map((option) => (
+                          <option key={option.id} value={option.id}>
+                            {option.display_name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Quantity
+                      <input
+                        required
+                        min="0.000001"
+                        step="0.000001"
+                        type="number"
+                        value={internationalForm.quantity}
+                        onChange={(event) => setInternationalForm({ ...internationalForm, quantity: event.target.value })}
+                      />
+                    </label>
+                    <label>
+                      Avg buy price
+                      <input
+                        required
+                        min="0.001"
+                        step="0.001"
+                        type="number"
+                        value={internationalForm.avgPrice}
+                        onChange={(event) => setInternationalForm({ ...internationalForm, avgPrice: event.target.value })}
+                      />
+                    </label>
+                    <label>
+                      Current price
+                      <div className="inline-actions">
+                        <input
+                          required
+                          min="0.001"
+                          step="0.001"
+                          type="number"
+                          value={internationalForm.currentPrice}
+                          onChange={(event) => setInternationalForm({ ...internationalForm, currentPrice: event.target.value })}
+                        />
+                        <button className="subtle-action small-action" type="button" disabled={loadingInternationalPrice} onClick={() => void fetchInternationalCurrentPrice()}>
+                          {loadingInternationalPrice && <Loader2 className="spin" size={14} />}
+                          {loadingInternationalPrice ? "Fetching" : "Auto"}
+                        </button>
+                      </div>
+                    </label>
+                  </div>
+                  <button className="primary-action portfolio-entry-submit" disabled={savingInternationalInvestment} type="submit">
+                    {savingInternationalInvestment && <Loader2 className="spin" size={16} />}
+                    {savingInternationalInvestment ? "Saving" : "Add international"}
+                  </button>
+                </form>
+                <p className="form-hint">
+                  Note: International return % is an approximation. If you invest in INR, changing USD/INR exchange rates can
+                  impact returns, so the percentage may not be fully accurate.
+                </p>
               </div>
-            </form>
 
-            <section className="dashboard-grid investment-summary-grid" aria-label="Investment summary">
+              <aside className="portfolio-compose-aside">
+                <GoalAllocationPicker
+                  goals={goalsByCompletion}
+                  allocations={internationalForm.goalAllocations}
+                  onChange={(goalAllocations) => setInternationalForm({ ...internationalForm, goalAllocations })}
+                  sipHint={
+                    selectedInternationalSipSiblingCount > 1 && internationalForm.goalAllocations.length === 0
+                      ? multiGoalSipHint
+                      : null
+                  }
+                />
+              </aside>
+            </div>
+
+            <section className="dashboard-grid investment-summary-grid portfolio-summary-row" aria-label="Investment summary">
               <article>
                 <p>Total invested (USD)</p>
                 <strong>{formatUsdCurrency(totalInvested)}</strong>
@@ -4295,10 +5214,6 @@ function DashboardShell({
                 </strong>
               </article>
             </section>
-            <p className="form-hint">
-              Note: International return % is an approximation. If you invest in INR, changing USD/INR exchange rates can
-              impact returns, so the percentage may not be fully accurate.
-            </p>
 
             <div className="table-wrapper">
               {!internationalPortfolio || internationalPortfolio.holdings.length === 0 ? (
@@ -4318,7 +5233,7 @@ function DashboardShell({
                       <th>Abs P&amp;L</th>
                       <th>Abs.P&amp;L %</th>
                       <th>Goal</th>
-                      <th>Edit</th>
+                      <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -4327,114 +5242,174 @@ function DashboardShell({
                       const pnlPercent = parseAmount(holding.pnl_percent);
                       const tone = pnlTone(pnlValue);
                       const isEditing = editingHoldingId === holding.id;
+                      const linkedShares = linkedGoalShares(
+                        internationalPortfolio.holdings
+                          .filter(
+                            (entry) =>
+                              entry.symbol.trim().toUpperCase() === holding.symbol.trim().toUpperCase() &&
+                              entry.goal_id != null
+                          )
+                          .map((entry) => ({
+                            goal_id: entry.goal_id,
+                            goal_name: entry.goal_name,
+                            quantity: parseAmount(entry.quantity)
+                          }))
+                      );
+                      const isMultiGoalLinked = linkedShares.length > 1;
+                      const isMultiGoalEdit = isEditing && isMultiGoalLinked;
                       return (
-                        <tr key={holding.id} className={`holding-row holding-row--${tone}`}>
-                          <td>{holding.symbol}</td>
-                          <td>
-                            {isEditing ? (
-                              <input
-                                className="table-edit-input"
-                                min="0.000001"
-                                step="0.000001"
-                                type="number"
-                                value={holdingEditForm.unitsOrQuantity}
-                                onChange={(event) => setHoldingEditForm({ ...holdingEditForm, unitsOrQuantity: event.target.value })}
-                              />
-                            ) : (
-                              holding.quantity
-                            )}
-                          </td>
-                          <td>
-                            {isEditing ? (
-                              <input
-                                className="table-edit-input"
-                                min="0.001"
-                                step="0.001"
-                                type="number"
-                                value={holdingEditForm.avgPrice}
-                                onChange={(event) => setHoldingEditForm({ ...holdingEditForm, avgPrice: event.target.value })}
-                              />
-                            ) : (
-                              formatUsdCurrency(parseAmount(holding.avg_price))
-                            )}
-                          </td>
-                          <td>
-                            {isEditing ? (
-                              <select
-                                className="table-edit-input"
-                                value={holdingEditForm.optionId}
-                                onChange={(event) => setHoldingEditForm({ ...holdingEditForm, optionId: event.target.value })}
-                              >
-                                <option value="">No sector</option>
-                                {investmentOptions.international_sectors.map((option) => (
-                                  <option key={option.id} value={option.id}>
-                                    {option.display_name}
-                                  </option>
-                                ))}
-                              </select>
-                            ) : (
-                              holding.sector_name ?? "-"
-                            )}
-                          </td>
-                          <td title={holding.security_name ?? holding.symbol} className="table-text-ellipsis">
-                            {holding.security_name ?? holding.symbol}
-                          </td>
-                          <td>{formatUsdCurrency(parseAmount(holding.current_price))}</td>
-                          <td>{formatUsdCurrency(parseAmount(holding.invested_amount))}</td>
-                          <td>{formatUsdCurrency(parseAmount(holding.current_value))}</td>
-                          <td>
-                            <span className={`pnl-chip pnl-chip--${tone}`}>{formatSignedUsdCurrency(pnlValue)}</span>
-                          </td>
-                          <td>
-                            <span className={`pnl-chip pnl-chip--${tone}`}>{formatPnlPercent(pnlPercent)}</span>
-                          </td>
-                          <td>
-                            {isEditing ? (
-                              <select
-                                className="table-edit-input"
-                                value={holdingEditForm.goalId}
-                                onChange={(event) => setHoldingEditForm({ ...holdingEditForm, goalId: event.target.value })}
-                              >
-                                <option value="">No goal</option>
-                                {goals.map((goal) => (
-                                  <option key={goal.id} value={goal.id}>
-                                    {goal.name}
-                                  </option>
-                                ))}
-                              </select>
-                            ) : (
-                              holding.goal_name ?? "-"
-                            )}
-                          </td>
-                          <td>
-                            {isEditing ? (
-                              <form className="inline-actions holding-edit-actions" onSubmit={submitHoldingEdit}>
-                                <button className="subtle-action small-action" type="submit" disabled={savingHoldingEdit}>
-                                  {savingHoldingEdit ? "Saving" : "Save"}
-                                </button>
-                                <button className="subtle-action small-action" type="button" onClick={() => setEditingHoldingId(null)}>
-                                  Cancel
-                                </button>
-                              </form>
-                            ) : (
-                              <button
-                                className="subtle-action small-action"
-                                type="button"
-                                onClick={() =>
-                                  startEditHolding(
-                                    holding.id,
-                                    holding.quantity,
-                                    holding.avg_price,
-                                    holding.sector_option_id,
-                                    holding.goal_id
-                                  )
-                                }
-                              >
-                                <Pencil size={14} />
-                              </button>
-                            )}
-                          </td>
-                        </tr>
+                        <Fragment key={holding.id}>
+                          <tr
+                            className={`holding-row holding-row--${tone}${isMultiGoalEdit ? " holding-row--editing-linked" : ""}`}
+                          >
+                            <td>{holding.symbol}</td>
+                            <td>
+                              {isEditing ? (
+                                <label className="table-edit-field">
+                                  {isMultiGoalEdit ? <span className="table-edit-field-label">Total qty</span> : null}
+                                  <input
+                                    className="table-edit-input"
+                                    min="0.000001"
+                                    step="0.000001"
+                                    type="number"
+                                    value={holdingEditForm.unitsOrQuantity}
+                                    onChange={(event) =>
+                                      setHoldingEditForm({ ...holdingEditForm, unitsOrQuantity: event.target.value })
+                                    }
+                                  />
+                                </label>
+                              ) : (
+                                holding.quantity
+                              )}
+                            </td>
+                            <td>
+                              {isEditing ? (
+                                <input
+                                  className="table-edit-input"
+                                  min="0.001"
+                                  step="0.001"
+                                  type="number"
+                                  value={holdingEditForm.avgPrice}
+                                  onChange={(event) => setHoldingEditForm({ ...holdingEditForm, avgPrice: event.target.value })}
+                                />
+                              ) : (
+                                formatUsdCurrency(parseAmount(holding.avg_price))
+                              )}
+                            </td>
+                            <td>
+                              {isEditing ? (
+                                <select
+                                  className="table-edit-input"
+                                  value={holdingEditForm.optionId}
+                                  onChange={(event) => setHoldingEditForm({ ...holdingEditForm, optionId: event.target.value })}
+                                >
+                                  <option value="">No sector</option>
+                                  {investmentOptions.international_sectors.map((option) => (
+                                    <option key={option.id} value={option.id}>
+                                      {option.display_name}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : (
+                                holding.sector_name ?? "-"
+                              )}
+                            </td>
+                            <td title={holding.security_name ?? holding.symbol} className="table-text-ellipsis">
+                              {holding.security_name ?? holding.symbol}
+                            </td>
+                            <td>{formatUsdCurrency(parseAmount(holding.current_price))}</td>
+                            <td>{formatUsdCurrency(parseAmount(holding.invested_amount))}</td>
+                            <td>{formatUsdCurrency(parseAmount(holding.current_value))}</td>
+                            <td>
+                              <span className={`pnl-chip pnl-chip--${tone}`}>{formatSignedUsdCurrency(pnlValue)}</span>
+                            </td>
+                            <td>
+                              <span className={`pnl-chip pnl-chip--${tone}`}>{formatPnlPercent(pnlPercent)}</span>
+                            </td>
+                            <td>
+                              {isMultiGoalEdit ? (
+                                <LinkedGoalsCell shares={linkedShares} />
+                              ) : isEditing ? (
+                                <select
+                                  className="table-edit-input"
+                                  value={holdingEditForm.goalId}
+                                  onChange={(event) => setHoldingEditForm({ ...holdingEditForm, goalId: event.target.value })}
+                                >
+                                  <option value="">No goal</option>
+                                  {goalsByCompletion.map((goal) => (
+                                    <option key={goal.id} value={goal.id}>
+                                      {goal.name}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : isMultiGoalLinked ? (
+                                <span className="goal-shared-label" title={linkedShares.map((share) => share.goalName).join(", ")}>
+                                  {holding.goal_name ?? "Goal"}
+                                  <span className="goal-shared-badge">shared</span>
+                                </span>
+                              ) : (
+                                holding.goal_name ?? "-"
+                              )}
+                            </td>
+                            <td>
+                              {isEditing ? (
+                                <form className="holding-edit-actions" onSubmit={submitHoldingEdit}>
+                                  <div className="inline-actions">
+                                    <button className="subtle-action small-action" type="submit" disabled={savingHoldingEdit}>
+                                      {savingHoldingEdit ? "Saving" : "Save"}
+                                    </button>
+                                    <button className="subtle-action small-action" type="button" onClick={() => setEditingHoldingId(null)}>
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </form>
+                              ) : (
+                                <div className="inline-actions holding-row-actions">
+                                  <button
+                                    className="subtle-action small-action icon-action"
+                                    type="button"
+                                    aria-label={`Edit ${holding.security_name ?? holding.symbol}`}
+                                    title="Edit"
+                                    onClick={() =>
+                                      startEditHolding(
+                                        holding.id,
+                                        holding.quantity,
+                                        holding.avg_price,
+                                        holding.sector_option_id,
+                                        holding.goal_id
+                                      )
+                                    }
+                                  >
+                                    <Pencil size={14} />
+                                  </button>
+                                  <button
+                                    className="subtle-action small-action icon-action danger-action"
+                                    type="button"
+                                    aria-label={`Delete ${holding.security_name ?? holding.symbol}`}
+                                    title="Delete"
+                                    onClick={() =>
+                                      requestDeleteHolding(
+                                        holding.id,
+                                        holding.security_name ?? holding.symbol,
+                                        "international"
+                                      )
+                                    }
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                          {isMultiGoalEdit ? (
+                            <tr className="holding-edit-banner-row">
+                              <td colSpan={12}>
+                                Editing total quantity for this holding. On save, quantity is split across{" "}
+                                {linkedShares.map((share) => share.goalName).join(", ")} using the current percentages.
+                              </td>
+                            </tr>
+                          ) : null}
+                        </Fragment>
                       );
                     })}
                   </tbody>
@@ -4444,8 +5419,8 @@ function DashboardShell({
           </>
         )}
       </section>
-      </div>
-    );
+    </div>
+  );
   }
 
   function renderProfileSection() {
@@ -4524,11 +5499,10 @@ function DashboardShell({
         onMouseLeave={() => setSidebarHovered(false)}
       >
         <div className="sidebar-brand">
-          <div className="sidebar-mark">
+          <div className="sidebar-mark" aria-hidden="true">
             <WalletCards size={16} />
           </div>
           <div className="sidebar-brand-copy">
-            <p className="eyebrow">Finance</p>
             <strong>Ledgr</strong>
           </div>
         </div>
@@ -4599,6 +5573,60 @@ function DashboardShell({
                 </button>
               </div>
               {renderTransactionComposer()}
+            </div>
+          </div>
+        )}
+        {holdingPendingDelete !== null && (
+          <div
+            className="modal-backdrop"
+            role="presentation"
+            onClick={() => {
+              if (!deletingHolding) {
+                setHoldingPendingDelete(null);
+              }
+            }}
+          >
+            <div
+              className="transaction-modal confirm-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Confirm delete holding"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="modal-header">
+                <h2>Delete holding</h2>
+                <button
+                  className="subtle-action icon-action"
+                  type="button"
+                  aria-label="Close delete confirmation"
+                  disabled={deletingHolding}
+                  onClick={() => setHoldingPendingDelete(null)}
+                >
+                  <X size={14} />
+                </button>
+              </div>
+              <p className="confirm-modal-copy">
+                Delete <strong>{holdingPendingDelete.label}</strong>? This cannot be undone.
+              </p>
+              <div className="inline-actions confirm-modal-actions">
+                <button
+                  className="subtle-action"
+                  type="button"
+                  disabled={deletingHolding}
+                  onClick={() => setHoldingPendingDelete(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="primary-action danger-primary-action"
+                  type="button"
+                  disabled={deletingHolding}
+                  onClick={() => void confirmDeleteHolding()}
+                >
+                  {deletingHolding && <Loader2 className="spin" size={16} />}
+                  {deletingHolding ? "Deleting" : "Delete"}
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -4718,16 +5746,16 @@ function DashboardShell({
                 </button>
               </div>
               <div className="budget-overview-list">
-                {goals.length === 0 ? (
+                {goalsByCompletion.length === 0 ? (
                   <div className="panel-empty compact">
                     <strong>No goals yet</strong>
                     <p>Set a goal to track progress.</p>
                   </div>
                 ) : (
-                  goals.slice(0, 4).map((goal) => {
+                  goalsByCompletion.slice(0, 4).map((goal) => {
                     const target = parseAmount(goal.target_amount);
                     const current = parseAmount(goal.current_amount);
-                    const progress = target > 0 ? Math.min(100, Math.round((current / target) * 100)) : 0;
+                    const progress = Math.round(goalCompletionPercent(goal));
                     return (
                       <button
                         key={goal.id}

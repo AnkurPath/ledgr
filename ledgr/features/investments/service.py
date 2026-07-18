@@ -94,6 +94,7 @@ DEFAULT_INTERNATIONAL_SECTORS = (
     "Utilities",
     "Materials",
     "Real Estate",
+    "Gold",
     "Index",
     "Other",
 )
@@ -966,6 +967,17 @@ def update_mutual_fund_investment(
     return investment
 
 
+def delete_mutual_fund_investment(*, session: Session, user_id: UUID, investment_id: UUID) -> None:
+    investment = session.get(MutualFundInvestmentModel, investment_id)
+    if investment is None or investment.user_id != user_id:
+        raise LookupError("Mutual fund investment not found")
+
+    goal_id = investment.goal_id
+    session.delete(investment)
+    session.commit()
+    recalculate_goal_current_amount(session=session, user_id=user_id, goal_id=goal_id)
+
+
 def update_stock_investment(
     *,
     session: Session,
@@ -996,6 +1008,17 @@ def update_stock_investment(
     return investment
 
 
+def delete_stock_investment(*, session: Session, user_id: UUID, investment_id: UUID) -> None:
+    investment = session.get(StockInvestmentModel, investment_id)
+    if investment is None or investment.user_id != user_id:
+        raise LookupError("Stock investment not found")
+
+    goal_id = investment.goal_id
+    session.delete(investment)
+    session.commit()
+    recalculate_goal_current_amount(session=session, user_id=user_id, goal_id=goal_id)
+
+
 def update_international_investment(
     *,
     session: Session,
@@ -1024,6 +1047,17 @@ def update_international_investment(
     if previous_goal_id is not None and previous_goal_id != investment.goal_id:
         recalculate_goal_current_amount(session=session, user_id=user_id, goal_id=previous_goal_id)
     return investment
+
+
+def delete_international_investment(*, session: Session, user_id: UUID, investment_id: UUID) -> None:
+    investment = session.get(InternationalInvestmentModel, investment_id)
+    if investment is None or investment.user_id != user_id:
+        raise LookupError("International investment not found")
+
+    goal_id = investment.goal_id
+    session.delete(investment)
+    session.commit()
+    recalculate_goal_current_amount(session=session, user_id=user_id, goal_id=goal_id)
 
 
 def recalculate_goal_current_amount(*, session: Session, user_id: UUID, goal_id: Optional[UUID]) -> None:

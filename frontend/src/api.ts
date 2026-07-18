@@ -221,11 +221,15 @@ export const api = {
     request<MutualFundInvestment>("/investments/mutual-funds", { method: "POST", token, body }),
   updateMutualFundInvestment: (token: string, investmentId: string, body: UpdateMutualFundInvestmentPayload) =>
     request<MutualFundInvestment>(`/investments/mutual-funds/${investmentId}`, { method: "PATCH", token, body }),
+  deleteMutualFundInvestment: (token: string, investmentId: string) =>
+    request<void>(`/investments/mutual-funds/${investmentId}`, { method: "DELETE", token }),
   listMutualFundPortfolio: (token: string) => request<MutualFundPortfolio>("/investments/mutual-funds", { token }),
   createStockInvestment: (token: string, body: CreateStockInvestmentPayload) =>
     request<StockInvestment>("/investments/stocks", { method: "POST", token, body }),
   updateStockInvestment: (token: string, investmentId: string, body: UpdateStockInvestmentPayload) =>
     request<StockInvestment>(`/investments/stocks/${investmentId}`, { method: "PATCH", token, body }),
+  deleteStockInvestment: (token: string, investmentId: string) =>
+    request<void>(`/investments/stocks/${investmentId}`, { method: "DELETE", token }),
   listStockPortfolio: (token: string) => request<StockPortfolio>("/investments/stocks", { token }),
   fetchStockCurrentPrice: (token: string, symbol: string, exchange?: string) =>
     request<CurrentPrice>(
@@ -236,6 +240,8 @@ export const api = {
     request<InternationalInvestment>("/investments/international", { method: "POST", token, body }),
   updateInternationalInvestment: (token: string, investmentId: string, body: UpdateInternationalInvestmentPayload) =>
     request<InternationalInvestment>(`/investments/international/${investmentId}`, { method: "PATCH", token, body }),
+  deleteInternationalInvestment: (token: string, investmentId: string) =>
+    request<void>(`/investments/international/${investmentId}`, { method: "DELETE", token }),
   listInternationalPortfolio: (token: string) => request<InternationalPortfolio>("/investments/international", { token }),
   fetchInternationalCurrentPrice: (token: string, symbol: string) =>
     request<CurrentPrice>(`/investments/international/current-price?symbol=${encodeURIComponent(symbol)}`, { token }),
