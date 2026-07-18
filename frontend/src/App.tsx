@@ -99,6 +99,35 @@ function isGoldLabeled(name: string | null | undefined): boolean {
   return (name ?? "").trim().toLowerCase() === "gold";
 }
 
+function isInternationalLabeled(name: string | null | undefined): boolean {
+  const normalized = (name ?? "").trim().toLowerCase();
+  return normalized === "international fund" || normalized === "international";
+}
+
+function mutualFundOverviewClass(categoryName: string | null | undefined): AssetClassLabel {
+  if (isGoldLabeled(categoryName)) {
+    return "Gold";
+  }
+  if (isInternationalLabeled(categoryName)) {
+    return "International Investment";
+  }
+  return "Mutual Funds";
+}
+
+function stockOverviewClass(sectorName: string | null | undefined): AssetClassLabel {
+  if (isGoldLabeled(sectorName)) {
+    return "Gold";
+  }
+  if (isInternationalLabeled(sectorName)) {
+    return "International Investment";
+  }
+  return "Stocks";
+}
+
+function internationalOverviewClass(sectorName: string | null | undefined): AssetClassLabel {
+  return isGoldLabeled(sectorName) ? "Gold" : "International Investment";
+}
+
 const investmentTabNames = ["Overview", ...INVESTMENT_TAB_ASSET_CLASSES] as const;
 
 type GoalPercentAllocation = { goalId: string; percent: string };
@@ -3778,12 +3807,16 @@ function DashboardShell({
 
       const mutualFundGoldInr = mutualFundHoldings.reduce(
         (sum, holding) =>
-          isGoldLabeled(holding.category_name) ? sum + parseAmount(holding.current_value) : sum,
+          mutualFundOverviewClass(holding.category_name) === "Gold"
+            ? sum + parseAmount(holding.current_value)
+            : sum,
         0
       );
       const stockGoldInr = stockHoldings.reduce(
         (sum, holding) =>
-          isGoldLabeled(holding.sector_name) ? sum + parseAmount(holding.current_value) : sum,
+          stockOverviewClass(holding.sector_name) === "Gold"
+            ? sum + parseAmount(holding.current_value)
+            : sum,
         0
       );
       const internationalGoldInr =
@@ -3791,7 +3824,7 @@ function DashboardShell({
           ? 0
           : internationalHoldings.reduce(
               (sum, holding) =>
-                isGoldLabeled(holding.sector_name)
+                internationalOverviewClass(holding.sector_name) === "Gold"
                   ? sum + parseAmount(holding.current_value) * usdInrRate
                   : sum,
               0
@@ -3800,15 +3833,35 @@ function DashboardShell({
 
       const mutualFundTotalInr = mutualFundHoldings.reduce(
         (sum, holding) =>
-          isGoldLabeled(holding.category_name) ? sum : sum + parseAmount(holding.current_value),
+          mutualFundOverviewClass(holding.category_name) === "Mutual Funds"
+            ? sum + parseAmount(holding.current_value)
+            : sum,
         0
       );
       const stockTotalInr = stockHoldings.reduce(
         (sum, holding) =>
-          isGoldLabeled(holding.sector_name) ? sum : sum + parseAmount(holding.current_value),
+          stockOverviewClass(holding.sector_name) === "Stocks"
+            ? sum + parseAmount(holding.current_value)
+            : sum,
         0
       );
-      const internationalNonGoldInr = Math.max(0, internationalCurrentInr - internationalGoldInr);
+      const mutualFundInternationalInr = mutualFundHoldings.reduce(
+        (sum, holding) =>
+          mutualFundOverviewClass(holding.category_name) === "International Investment"
+            ? sum + parseAmount(holding.current_value)
+            : sum,
+        0
+      );
+      const stockInternationalInr = stockHoldings.reduce(
+        (sum, holding) =>
+          stockOverviewClass(holding.sector_name) === "International Investment"
+            ? sum + parseAmount(holding.current_value)
+            : sum,
+        0
+      );
+      const internationalNativeInr = Math.max(0, internationalCurrentInr - internationalGoldInr);
+      const internationalTotalInr =
+        internationalNativeInr + mutualFundInternationalInr + stockInternationalInr;
 
       const transactionValueByAssetClass = Object.fromEntries(
         TRANSACTION_ASSET_CLASSES.map((label) => [label, 0])
@@ -3830,7 +3883,7 @@ function DashboardShell({
         } else if (label === "Stocks") {
           value = stockTotalInr;
         } else if (label === "International Investment") {
-          value = internationalNonGoldInr;
+          value = internationalTotalInr;
         } else if (label === "Gold") {
           value = goldTotalInr;
         } else if (isTransactionAssetClass(label)) {
@@ -3891,26 +3944,27 @@ function DashboardShell({
       };
 
       for (const holding of mutualFundHoldings) {
-        const value = parseAmount(holding.current_value);
         addToGoalClass(
           holding.goal_id,
-          isGoldLabeled(holding.category_name) ? "Gold" : "Mutual Funds",
-          value
+          mutualFundOverviewClass(holding.category_name),
+          parseAmount(holding.current_value)
         );
       }
       for (const holding of stockHoldings) {
-        const value = parseAmount(holding.current_value);
-        addToGoalClass(holding.goal_id, isGoldLabeled(holding.sector_name) ? "Gold" : "Stocks", value);
+        addToGoalClass(
+          holding.goal_id,
+          stockOverviewClass(holding.sector_name),
+          parseAmount(holding.current_value)
+        );
       }
       for (const holding of internationalHoldings) {
         if (usdInrRate === null) {
           continue;
         }
-        const value = parseAmount(holding.current_value) * usdInrRate;
         addToGoalClass(
           holding.goal_id,
-          isGoldLabeled(holding.sector_name) ? "Gold" : "International Investment",
-          value
+          internationalOverviewClass(holding.sector_name),
+          parseAmount(holding.current_value) * usdInrRate
         );
       }
       for (const transaction of transactions) {
@@ -3961,9 +4015,7 @@ function DashboardShell({
           if (!matchesGoalId(holding.goal_id, goalId)) {
             continue;
           }
-          const assetClass: AssetClassLabel = isGoldLabeled(holding.category_name)
-            ? "Gold"
-            : "Mutual Funds";
+          const assetClass = mutualFundOverviewClass(holding.category_name);
           if (assetClassFilter && assetClass !== assetClassFilter) {
             continue;
           }
@@ -3979,7 +4031,7 @@ function DashboardShell({
           if (!matchesGoalId(holding.goal_id, goalId)) {
             continue;
           }
-          const assetClass: AssetClassLabel = isGoldLabeled(holding.sector_name) ? "Gold" : "Stocks";
+          const assetClass = stockOverviewClass(holding.sector_name);
           if (assetClassFilter && assetClass !== assetClassFilter) {
             continue;
           }
@@ -3995,9 +4047,7 @@ function DashboardShell({
           if (!matchesGoalId(holding.goal_id, goalId) || usdInrRate === null) {
             continue;
           }
-          const assetClass: AssetClassLabel = isGoldLabeled(holding.sector_name)
-            ? "Gold"
-            : "International Investment";
+          const assetClass = internationalOverviewClass(holding.sector_name);
           if (assetClassFilter && assetClass !== assetClassFilter) {
             continue;
           }
