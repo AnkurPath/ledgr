@@ -10,6 +10,7 @@ from ledgr.features.users.models import (
 )
 from ledgr.features.transactions.models import TransactionModel
 from ledgr.features.investments.models import (
+    CryptoInvestmentModel,
     InvestmentOptionModel,
     InternationalInvestmentModel,
     MutualFundDataModel,
@@ -30,6 +31,7 @@ __all__ = [
     "MutualFundInvestmentModel",
     "StockInvestmentModel",
     "InternationalInvestmentModel",
+    "CryptoInvestmentModel",
     "InvestmentOptionModel",
     "NetWorthModel",
 ]

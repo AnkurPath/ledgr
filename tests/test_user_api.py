@@ -678,9 +678,91 @@ def test_net_worth_includes_investments_and_history() -> None:
     body = response.json()
     assert body["stocks_value"] == "120.00"
     assert body["international_value"] == "17000.00"
+    assert body["crypto_value"] == "0.00"
+    assert body["other_investments_value"] == "0.00"
     assert body["net_worth"] == "17120.00"
     assert len(body["history"]) == 7
     assert body["history"][-1]["net_worth"] == "17120.00"
+
+
+def test_net_worth_includes_crypto_holdings() -> None:
+    from decimal import Decimal
+
+    from ledgr.features.investments import service as investment_service
+
+    client = make_test_client()
+    token = register_user(client, email="crypto-networth@example.com")
+    headers = auth_headers(token)
+
+    created = client.post(
+        "/investments/crypto",
+        json={
+            "symbol": "BTC",
+            "asset_name": "Bitcoin",
+            "quantity": "1.000000",
+            "avg_price": "100.000",
+            "current_price": "200.000",
+        },
+        headers=headers,
+    )
+    assert created.status_code == 201
+
+    original_fetch = investment_service.fetch_current_price
+
+    def fake_fetch_current_price(*, symbol: str, exchange=None, market: str = "IN"):
+        del exchange
+        del market
+        if symbol.upper() == "INR=X":
+            return symbol, Decimal("85.000"), "USD/INR"
+        return symbol, Decimal("1.000"), None
+
+    investment_service.fetch_current_price = fake_fetch_current_price
+    try:
+        response = client.get("/users/net-worth?days=7", headers=headers)
+    finally:
+        investment_service.fetch_current_price = original_fetch
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["crypto_value"] == "17000.00"
+    assert body["net_worth"] == "17000.00"
+
+
+def test_net_worth_includes_epf_ppf_nps_holdings() -> None:
+    client = make_test_client()
+    token = register_user(client, email="epf-networth@example.com")
+    headers = auth_headers(token)
+
+    with Session(client.app.state.test_engine) as session:
+        seed_global_categories(session)
+
+    accounts = client.get("/users/setup/accounts", headers=headers).json()
+    cash_account = next(account for account in accounts if account["name"] == "Cash")
+    categories = client.get("/users/setup/categories", headers=headers).json()
+    epf_category = next(
+        category for category in categories["investment"] if category["name"] == "EPF/PPF/NPS"
+    )
+
+    created = client.post(
+        "/transactions",
+        json={
+            "date": "2026-07-18T10:00:00+00:00",
+            "amount": "50000.00",
+            "account_id": cash_account["id"],
+            "transaction_type": "INVESTMENT",
+            "category_id": epf_category["id"],
+            "merchant": "EPF",
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200
+
+    response = client.get("/users/net-worth?days=7", headers=headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["other_investments_value"] == "50000.00"
+    assert body["accounts_value"] == "0.00"
+    assert body["net_worth"] == "50000.00"
 
 
 def test_goals_are_scoped_to_current_user() -> None:

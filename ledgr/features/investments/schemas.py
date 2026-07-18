@@ -198,6 +198,65 @@ class InternationalInvestmentPortfolioResponse(BaseModel):
     total_pnl_percent: Decimal
 
 
+class CryptoInvestmentUpsertRequest(BaseModel):
+    symbol: str = Field(min_length=1, max_length=25)
+    asset_name: Optional[str] = Field(default=None, max_length=250)
+    goal_id: Optional[UUID] = None
+    sector_option_id: Optional[UUID] = None
+    quantity: Decimal = Field(gt=0)
+    avg_price: Decimal = Field(gt=0)
+    current_price: Optional[Decimal] = Field(default=None, gt=0)
+
+
+class CryptoInvestmentUpdateRequest(BaseModel):
+    quantity: Decimal = Field(gt=0)
+    avg_price: Decimal = Field(gt=0)
+    current_price: Optional[Decimal] = Field(default=None, gt=0)
+    goal_id: Optional[UUID] = None
+    sector_option_id: Optional[UUID] = None
+
+
+class CryptoInvestmentUpsertResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    user_id: UUID
+    goal_id: Optional[UUID] = None
+    sector_option_id: Optional[UUID] = None
+    symbol: str
+    asset_name: Optional[str] = None
+    quantity: Decimal
+    avg_price: Decimal
+    current_price: Decimal
+    created_at: datetime
+    updated_at: datetime
+
+
+class CryptoInvestmentHolding(BaseModel):
+    id: UUID
+    symbol: str
+    asset_name: Optional[str] = None
+    goal_id: Optional[UUID] = None
+    goal_name: Optional[str] = None
+    sector_option_id: Optional[UUID] = None
+    sector_name: Optional[str] = None
+    quantity: Decimal
+    avg_price: Decimal
+    current_price: Decimal
+    invested_amount: Decimal
+    current_value: Decimal
+    pnl: Decimal
+    pnl_percent: Decimal
+
+
+class CryptoInvestmentPortfolioResponse(BaseModel):
+    holdings: list[CryptoInvestmentHolding]
+    total_invested_amount: Decimal
+    total_current_value: Decimal
+    total_pnl: Decimal
+    total_pnl_percent: Decimal
+
+
 class CurrentPriceResponse(BaseModel):
     symbol: str
     market_symbol: str
@@ -219,6 +278,9 @@ class InvestmentPriceRefreshResponse(BaseModel):
     international_total: int
     international_updated: int
     international_failed: int
+    crypto_total: int = 0
+    crypto_updated: int = 0
+    crypto_failed: int = 0
 
 
 class InvestmentOptionCreate(BaseModel):
@@ -243,3 +305,4 @@ class InvestmentOptionsCatalogResponse(BaseModel):
     stock_sectors: list[InvestmentOptionResponse]
     international_sectors: list[InvestmentOptionResponse]
     mutual_fund_categories: list[InvestmentOptionResponse]
+    crypto_sectors: list[InvestmentOptionResponse] = []

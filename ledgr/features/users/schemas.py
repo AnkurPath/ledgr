@@ -260,5 +260,7 @@ class NetWorthOverviewResponse(BaseModel):
     mutual_funds_value: Decimal
     stocks_value: Decimal
     international_value: Decimal
+    crypto_value: Decimal = Decimal("0.00")
+    other_investments_value: Decimal = Decimal("0.00")
     as_of: datetime
     history: list[NetWorthHistoryPoint]

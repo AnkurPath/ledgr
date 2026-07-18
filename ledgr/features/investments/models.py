@@ -167,3 +167,44 @@ class InternationalInvestmentModel(SQLModel, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()),
     )
 
+
+class CryptoInvestmentModel(SQLModel, table=True):
+    __tablename__ = "crypto_investments"
+    __table_args__ = (
+        Index(
+            "uq_crypto_investments_user_symbol_goal",
+            "user_id",
+            "symbol",
+            "goal_id",
+            unique=True,
+            postgresql_where=text("goal_id IS NOT NULL"),
+            sqlite_where=text("goal_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_crypto_investments_user_symbol_no_goal",
+            "user_id",
+            "symbol",
+            unique=True,
+            postgresql_where=text("goal_id IS NULL"),
+            sqlite_where=text("goal_id IS NULL"),
+        ),
+    )
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True, index=True)
+    user_id: UUID = Field(foreign_key="users.id", index=True, nullable=False)
+    goal_id: Optional[UUID] = Field(default=None, foreign_key="goals.id", index=True, nullable=True)
+    sector_option_id: Optional[UUID] = Field(default=None, foreign_key="investment_options.id", index=True, nullable=True)
+    symbol: str = Field(sa_column=Column(String(25), nullable=False, index=True))
+    asset_name: Optional[str] = Field(default=None, sa_column=Column(String(250), nullable=True, index=True))
+    quantity: Decimal = Field(sa_column=Column(Numeric(17, 6), nullable=False, index=True))
+    avg_price: Decimal = Field(sa_column=Column(Numeric(14, 3), nullable=False, index=True))
+    current_price: Decimal = Field(sa_column=Column(Numeric(14, 3), nullable=False, index=True))
+    created_at: datetime = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()),
+    )
+    updated_at: datetime = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()),
+    )
+

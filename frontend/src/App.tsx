@@ -32,6 +32,7 @@ import type {
   CreateMutualFundInvestmentPayload,
   CreateInternationalInvestmentPayload,
   CreateStockInvestmentPayload,
+  CreateCryptoInvestmentPayload,
   CreateAccountPayload,
   CreateBudgetPayload,
   CreateGoalPayload,
@@ -44,6 +45,7 @@ import type {
   MutualFundSearchItem,
   NetWorthOverview,
   StockPortfolio,
+  CryptoPortfolio,
   InternationalPortfolio,
   InvestmentOptionsCatalog,
   Tag,
@@ -68,24 +70,24 @@ const ASSET_CLASS_LABELS = [
   "Mutual Funds",
   "Stocks",
   "International Investment",
+  "EPF/PPF/NPS",
   "Gold",
   "Fixed Deposit",
   "Real Estate",
-  "Crypto",
-  "Provident Fund"
+  "Crypto"
 ] as const;
 type AssetClassLabel = (typeof ASSET_CLASS_LABELS)[number];
 const INVESTMENT_ALLOCATION_COLORS: Record<AssetClassLabel, string> = {
   "Mutual Funds": "#1e3a5f",
   Stocks: "#3b6ea5",
   "International Investment": "#6b8cae",
+  "EPF/PPF/NPS": "#5c5346",
   Gold: "#d4af37",
   "Fixed Deposit": "#8b7355",
   "Real Estate": "#c0563a",
-  Crypto: "#8b5e3c",
-  "Provident Fund": "#5c5346"
+  Crypto: "#8b5e3c"
 };
-const TRANSACTION_ASSET_CLASSES = ["Fixed Deposit", "Real Estate", "Crypto", "Provident Fund"] as const;
+const TRANSACTION_ASSET_CLASSES = ["EPF/PPF/NPS", "Fixed Deposit", "Real Estate"] as const;
 type TransactionAssetClass = (typeof TRANSACTION_ASSET_CLASSES)[number];
 const INVESTMENT_TAB_ASSET_CLASSES = ASSET_CLASS_LABELS.filter(
   (label) => label !== "Gold"
@@ -132,16 +134,23 @@ const investmentTabNames = ["Overview", ...INVESTMENT_TAB_ASSET_CLASSES] as cons
 
 type GoalPercentAllocation = { goalId: string; percent: string };
 
-function goalCompletionPercent(goal: Goal): number {
+function goalCompletionPercent(goal: Goal, currentAmount?: number): number {
   const target = parseAmount(goal.target_amount);
   if (target <= 0) {
     return 0;
   }
-  return Math.min(100, (parseAmount(goal.current_amount) / target) * 100);
+  const current = currentAmount ?? parseAmount(goal.current_amount);
+  return Math.min(100, (current / target) * 100);
 }
 
-function compareGoalsByCompletion(left: Goal, right: Goal): number {
-  const completionDelta = goalCompletionPercent(right) - goalCompletionPercent(left);
+function compareGoalsByCompletion(
+  left: Goal,
+  right: Goal,
+  currentById?: Map<string, number>
+): number {
+  const completionDelta =
+    goalCompletionPercent(right, currentById?.get(right.id)) -
+    goalCompletionPercent(left, currentById?.get(left.id));
   if (completionDelta !== 0) {
     return completionDelta;
   }
@@ -150,6 +159,19 @@ function compareGoalsByCompletion(left: Goal, right: Goal): number {
 
 function formatPercentValue(value: number): string {
   return (Math.round(value * 100) / 100).toFixed(2);
+}
+
+function formatInvestmentSummaryNote(parts: string[]): string {
+  if (parts.length === 0) {
+    return "Mutual funds, stocks & international";
+  }
+  if (parts.length === 1) {
+    return parts[0];
+  }
+  if (parts.length === 2) {
+    return `${parts[0]} & ${parts[1]}`;
+  }
+  return `${parts.slice(0, -1).join(", ")} & ${parts[parts.length - 1]}`;
 }
 
 function equalGoalPercents(count: number): string[] {
@@ -1083,6 +1105,7 @@ function DashboardShell({
   const [selectedMutualFund, setSelectedMutualFund] = useState<MutualFundSearchItem | null>(null);
   const [mutualFundPortfolio, setMutualFundPortfolio] = useState<MutualFundPortfolio | null>(null);
   const [stockPortfolio, setStockPortfolio] = useState<StockPortfolio | null>(null);
+  const [cryptoPortfolio, setCryptoPortfolio] = useState<CryptoPortfolio | null>(null);
   const [internationalPortfolio, setInternationalPortfolio] = useState<InternationalPortfolio | null>(null);
   const [usdInrRate, setUsdInrRate] = useState<number | null>(null);
   const [netWorthOverview, setNetWorthOverview] = useState<NetWorthOverview | null>(null);
@@ -1116,14 +1139,17 @@ function DashboardShell({
   const [investmentOptions, setInvestmentOptions] = useState<InvestmentOptionsCatalog>({
     stock_sectors: [],
     international_sectors: [],
-    mutual_fund_categories: []
+    mutual_fund_categories: [],
+    crypto_sectors: []
   });
   const [loadingMutualFundSearch, setLoadingMutualFundSearch] = useState(false);
   const [savingMutualFundInvestment, setSavingMutualFundInvestment] = useState(false);
   const [savingStockInvestment, setSavingStockInvestment] = useState(false);
   const [savingInternationalInvestment, setSavingInternationalInvestment] = useState(false);
+  const [savingCryptoInvestment, setSavingCryptoInvestment] = useState(false);
   const [loadingStockPrice, setLoadingStockPrice] = useState(false);
   const [loadingInternationalPrice, setLoadingInternationalPrice] = useState(false);
+  const [loadingCryptoPrice, setLoadingCryptoPrice] = useState(false);
   const [refreshingInvestmentData, setRefreshingInvestmentData] = useState(false);
   const [latestNavDateFromSource, setLatestNavDateFromSource] = useState<string | null>(null);
   const [mutualFundForm, setMutualFundForm] = useState({
@@ -1152,7 +1178,29 @@ function DashboardShell({
     avgPrice: "",
     currentPrice: ""
   });
-  const [editingTransactionId, setEditingTransactionId] = useState<number | null>(null);
+  const [cryptoForm, setCryptoForm] = useState({
+    symbol: "",
+    assetName: "",
+    sectorOptionId: "",
+    quantity: "",
+    avgPrice: "",
+    currentPrice: "",
+    goalAllocations: [] as GoalPercentAllocation[]
+  });
+  const [transactionAssetForm, setTransactionAssetForm] = useState({
+    name: "",
+    amount: "",
+    goalAllocations: [] as GoalPercentAllocation[]
+  });
+  const [savingTransactionAsset, setSavingTransactionAsset] = useState(false);
+  const [editingTransactionAssetId, setEditingTransactionAssetId] = useState<string | null>(null);
+  const [transactionAssetEditForm, setTransactionAssetEditForm] = useState({
+    name: "",
+    amount: "",
+    goalId: ""
+  });
+  const [savingTransactionAssetEdit, setSavingTransactionAssetEdit] = useState(false);
+  const [editingTransactionId, setEditingTransactionId] = useState<string | number | null>(null);
   const [savingTransactionEdit, setSavingTransactionEdit] = useState(false);
   const [accountForm, setAccountForm] = useState({
     name: "",
@@ -1204,7 +1252,7 @@ function DashboardShell({
   const [holdingPendingDelete, setHoldingPendingDelete] = useState<{
     id: string;
     label: string;
-    assetClass: "mutual_funds" | "stocks" | "international";
+    assetClass: "mutual_funds" | "stocks" | "international" | "crypto" | "transaction_asset";
   } | null>(null);
   const [deletingHolding, setDeletingHolding] = useState(false);
   const [budgetForm, setBudgetForm] = useState({
@@ -1317,6 +1365,16 @@ function DashboardShell({
       ),
     [transactions, transactionDateRange]
   );
+  // Portfolio holdings (EPF/PPF/NPS, FD, etc.) stay in Investment — not the Transactions ledger.
+  const ledgerTransactions = useMemo(
+    () => filteredTransactions.filter((transaction) => transaction.transaction_type !== "INVESTMENT"),
+    [filteredTransactions]
+  );
+  // EPF/FD/RE holdings are stored as INVESTMENT rows but are not ledger transactions.
+  const ledgerTransactionCount = useMemo(
+    () => transactions.filter((transaction) => transaction.transaction_type !== "INVESTMENT").length,
+    [transactions]
+  );
   const spendingAnalysis = useMemo(() => {
     const totals: Record<AnalysisTagName, number> = {
       Needs: 0,
@@ -1324,9 +1382,9 @@ function DashboardShell({
       Investments: 0
     };
     let untagged = 0;
-    for (const transaction of filteredTransactions) {
+    for (const transaction of ledgerTransactions) {
       const type = transaction.transaction_type;
-      if (type !== "EXPENSE" && type !== "INVESTMENT" && type !== "REFUND") {
+      if (type !== "EXPENSE" && type !== "REFUND") {
         continue;
       }
       const amount = Math.abs(parseAmount(transaction.amount));
@@ -1334,7 +1392,7 @@ function DashboardShell({
       const tagName = transaction.tag_id ? analysisTagById[String(transaction.tag_id)] : undefined;
       if (tagName === "Needs" || tagName === "Wants") {
         totals[tagName] += sign * amount;
-      } else if (type === "INVESTMENT" || tagName === "Investments") {
+      } else if (tagName === "Investments") {
         totals.Investments += amount;
       } else {
         untagged += sign * amount;
@@ -1346,14 +1404,79 @@ function DashboardShell({
     untagged = Math.max(0, untagged);
     const taggedTotal = totals.Needs + totals.Wants + totals.Investments;
     return { totals, taggedTotal, untagged, total: taggedTotal + untagged };
-  }, [filteredTransactions, analysisTagById]);
+  }, [ledgerTransactions, analysisTagById]);
+  const investmentCategoryById = useMemo(
+    () => Object.fromEntries(categoriesByKind.investment.map((category) => [category.id, category.name])),
+    [categoriesByKind.investment]
+  );
+  const transactionInvestmentValueByClass = useMemo(() => {
+    const totals = Object.fromEntries(TRANSACTION_ASSET_CLASSES.map((label) => [label, 0])) as Record<
+      TransactionAssetClass,
+      number
+    >;
+    for (const transaction of transactions) {
+      if (transaction.transaction_type !== "INVESTMENT" || !transaction.category_id) {
+        continue;
+      }
+      const categoryName = investmentCategoryById[transaction.category_id];
+      if (!categoryName || !isTransactionAssetClass(categoryName)) {
+        continue;
+      }
+      totals[categoryName] += Math.abs(parseAmount(transaction.amount));
+    }
+    return totals;
+  }, [transactions, investmentCategoryById]);
+  const otherInvestmentsValue = useMemo(
+    () => TRANSACTION_ASSET_CLASSES.reduce((sum, label) => sum + transactionInvestmentValueByClass[label], 0),
+    [transactionInvestmentValueByClass]
+  );
   const investmentsValue = useMemo(() => {
     const mf = parseAmount(mutualFundPortfolio?.total_current_value ?? "0");
     const stocks = parseAmount(stockPortfolio?.total_current_value ?? "0");
     const intlUsd = parseAmount(internationalPortfolio?.total_current_value ?? "0");
     const intl = usdInrRate !== null ? intlUsd * usdInrRate : 0;
-    return mf + stocks + intl;
-  }, [mutualFundPortfolio, stockPortfolio, internationalPortfolio, usdInrRate]);
+    const cryptoUsd = parseAmount(cryptoPortfolio?.total_current_value ?? "0");
+    const crypto = usdInrRate !== null ? cryptoUsd * usdInrRate : 0;
+    return mf + stocks + intl + crypto + otherInvestmentsValue;
+  }, [mutualFundPortfolio, stockPortfolio, internationalPortfolio, cryptoPortfolio, usdInrRate, otherInvestmentsValue]);
+  const investmentSummaryNote = useMemo(() => {
+    const mf = parseAmount(mutualFundPortfolio?.total_current_value ?? "0");
+    const stocks = parseAmount(stockPortfolio?.total_current_value ?? "0");
+    const intlUsd = parseAmount(internationalPortfolio?.total_current_value ?? "0");
+    const intl = usdInrRate !== null ? intlUsd * usdInrRate : 0;
+    const cryptoUsd = parseAmount(cryptoPortfolio?.total_current_value ?? "0");
+    const crypto = usdInrRate !== null ? cryptoUsd * usdInrRate : 0;
+    const parts: string[] = [];
+    if (mf > 0) {
+      parts.push("Mutual funds");
+    }
+    if (stocks > 0) {
+      parts.push("stocks");
+    }
+    if (intl > 0) {
+      parts.push("international");
+    }
+    if (transactionInvestmentValueByClass["EPF/PPF/NPS"] > 0) {
+      parts.push("EPF/PPF/NPS");
+    }
+    if (crypto > 0) {
+      parts.push("crypto");
+    }
+    if (transactionInvestmentValueByClass["Fixed Deposit"] > 0) {
+      parts.push("fixed deposits");
+    }
+    if (transactionInvestmentValueByClass["Real Estate"] > 0) {
+      parts.push("real estate");
+    }
+    return formatInvestmentSummaryNote(parts);
+  }, [
+    mutualFundPortfolio,
+    stockPortfolio,
+    internationalPortfolio,
+    cryptoPortfolio,
+    usdInrRate,
+    transactionInvestmentValueByClass
+  ]);
   const netWorth = useMemo(() => {
     if (netWorthOverview) {
       return parseAmount(netWorthOverview.net_worth);
@@ -1456,13 +1579,69 @@ function DashboardShell({
     return () => window.clearInterval(timer);
   }, []);
   const goalsCount = goals.length;
+  // Same INR totals as Investment Overview "Asset allocation by goal".
+  const goalCurrentAmountById = useMemo(() => {
+    const totals = new Map<string, number>();
+    const linkedGoalIds = new Set<string>();
+    const add = (goalId: string | null | undefined, value: number) => {
+      if (goalId == null) {
+        return;
+      }
+      linkedGoalIds.add(goalId);
+      totals.set(goalId, (totals.get(goalId) ?? 0) + value);
+    };
+
+    for (const holding of mutualFundPortfolio?.holdings ?? []) {
+      add(holding.goal_id, parseAmount(holding.current_value));
+    }
+    for (const holding of stockPortfolio?.holdings ?? []) {
+      add(holding.goal_id, parseAmount(holding.current_value));
+    }
+    if (usdInrRate !== null) {
+      for (const holding of internationalPortfolio?.holdings ?? []) {
+        add(holding.goal_id, parseAmount(holding.current_value) * usdInrRate);
+      }
+      for (const holding of cryptoPortfolio?.holdings ?? []) {
+        add(holding.goal_id, parseAmount(holding.current_value) * usdInrRate);
+      }
+    }
+    for (const transaction of transactions) {
+      if (transaction.transaction_type !== "INVESTMENT" || !transaction.category_id) {
+        continue;
+      }
+      const categoryName = investmentCategoryById[transaction.category_id];
+      if (!categoryName || !isTransactionAssetClass(categoryName)) {
+        continue;
+      }
+      add(transaction.goal_id != null ? String(transaction.goal_id) : null, parseAmount(transaction.amount));
+    }
+
+    const resolved = new Map<string, number>();
+    for (const goal of goals) {
+      if (linkedGoalIds.has(goal.id)) {
+        resolved.set(goal.id, totals.get(goal.id) ?? 0);
+      } else {
+        resolved.set(goal.id, parseAmount(goal.current_amount));
+      }
+    }
+    return resolved;
+  }, [
+    goals,
+    mutualFundPortfolio,
+    stockPortfolio,
+    internationalPortfolio,
+    cryptoPortfolio,
+    usdInrRate,
+    transactions,
+    investmentCategoryById
+  ]);
   const goalsByCompletion = useMemo(
-    () => [...goals].sort(compareGoalsByCompletion),
-    [goals]
+    () => [...goals].sort((left, right) => compareGoalsByCompletion(left, right, goalCurrentAmountById)),
+    [goals, goalCurrentAmountById]
   );
-  const investmentCategoryById = useMemo(
-    () => Object.fromEntries(categoriesByKind.investment.map((category) => [category.id, category.name])),
-    [categoriesByKind.investment]
+  const goalNameById = useMemo(
+    () => Object.fromEntries(goals.map((goal) => [goal.id, goal.name])),
+    [goals]
   );
   const investmentTransactions = useMemo(() => {
     return transactions.filter((transaction) => {
@@ -1482,7 +1661,7 @@ function DashboardShell({
       setLoadingWorkspace(true);
     }
     setWorkspaceError(null);
-    const [accountsResult, goalsResult, budgetsResult, transactionsResult, categoriesResult, tagsResult, mutualFundsResult, stocksResult, internationalResult, investmentOptionsResult, goalTemplatesResult, netWorthResult, usdInrRateResult] =
+    const [accountsResult, goalsResult, budgetsResult, transactionsResult, categoriesResult, tagsResult, mutualFundsResult, stocksResult, cryptoResult, internationalResult, investmentOptionsResult, goalTemplatesResult, netWorthResult, usdInrRateResult] =
       await Promise.allSettled([
       api.listAccounts(token),
       api.listGoals(token),
@@ -1492,6 +1671,7 @@ function DashboardShell({
       api.listTags(token),
       api.listMutualFundPortfolio(token),
       api.listStockPortfolio(token),
+      api.listCryptoPortfolio(token),
       api.listInternationalPortfolio(token),
       api.listInvestmentOptions(token),
       api.listGoalTemplates(token),
@@ -1523,6 +1703,9 @@ function DashboardShell({
     if (stocksResult.status === "fulfilled") {
       setStockPortfolio(stocksResult.value);
     }
+    if (cryptoResult.status === "fulfilled") {
+      setCryptoPortfolio(cryptoResult.value);
+    }
     if (internationalResult.status === "fulfilled") {
       setInternationalPortfolio(internationalResult.value);
     }
@@ -1550,6 +1733,7 @@ function DashboardShell({
       tagsResult,
       mutualFundsResult,
       stocksResult,
+      cryptoResult,
       internationalResult,
       investmentOptionsResult,
       goalTemplatesResult,
@@ -1690,6 +1874,10 @@ function DashboardShell({
 
   async function submitTransaction(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (transactionForm.transactionType === "INVESTMENT") {
+      setWorkspaceError("Add EPF/PPF/NPS and other holdings under Investment, not Transactions.");
+      return;
+    }
     setSavingTransaction(true);
     setWorkspaceError(null);
     setWorkspaceMessage(null);
@@ -1715,11 +1903,7 @@ function DashboardShell({
       payload.category_id = transactionForm.categoryId ? Number(transactionForm.categoryId) : null;
     }
 
-    if (
-      transactionForm.transactionType === "EXPENSE" ||
-      transactionForm.transactionType === "INVESTMENT" ||
-      transactionForm.transactionType === "REFUND"
-    ) {
+    if (transactionForm.transactionType === "EXPENSE" || transactionForm.transactionType === "REFUND") {
       payload.tag_id = transactionForm.tagId || null;
     }
 
@@ -1964,6 +2148,132 @@ function DashboardShell({
     }
   }
 
+  function defaultInvestmentAccountId(): string {
+    const cash = accounts.find((account) => account.name.trim().toLowerCase() === "cash");
+    if (cash) {
+      return String(cash.id);
+    }
+    const nonCredit = accounts.find((account) => account.account_type !== "credit card");
+    if (nonCredit) {
+      return String(nonCredit.id);
+    }
+    return accounts[0] ? String(accounts[0].id) : "";
+  }
+
+  async function submitTransactionAssetInvestment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!isTransactionAssetClass(activeInvestmentTab)) {
+      return;
+    }
+    const category = categoriesByKind.investment.find((entry) => entry.name === activeInvestmentTab);
+    if (!category) {
+      setWorkspaceError(`${activeInvestmentTab} category is not available yet.`);
+      return;
+    }
+    const accountId = defaultInvestmentAccountId();
+    if (!accountId) {
+      setWorkspaceError("Add an account first to save this investment.");
+      return;
+    }
+    const allocationError = validateGoalPercentAllocations(transactionAssetForm.goalAllocations);
+    if (allocationError) {
+      setWorkspaceError(allocationError);
+      return;
+    }
+    const totalAmount = Number.parseFloat(transactionAssetForm.amount);
+    if (!Number.isFinite(totalAmount) || totalAmount <= 0) {
+      setWorkspaceError("Enter a valid amount.");
+      return;
+    }
+
+    setSavingTransactionAsset(true);
+    setWorkspaceError(null);
+    setWorkspaceMessage(null);
+
+    const allocations = transactionAssetForm.goalAllocations;
+    const goalIds: (string | null)[] = allocations.length > 0 ? allocations.map((entry) => entry.goalId) : [null];
+    const percents =
+      allocations.length > 0 ? allocations.map((entry) => Number.parseFloat(entry.percent) || 0) : [100];
+    const amountShares = splitQuantityByPercents(totalAmount, percents, 2);
+
+    try {
+      for (let index = 0; index < goalIds.length; index += 1) {
+        const amount = amountShares[index] ?? 0;
+        if (amount <= 0) {
+          continue;
+        }
+        const payload: CreateTransactionPayload = {
+          date: dateInputToIso(toDateInputValue()),
+          amount: quantityToPayload(amount, 2),
+          transaction_type: "INVESTMENT",
+          merchant: transactionAssetForm.name.trim() || activeInvestmentTab,
+          notes: null,
+          account_id: accountId,
+          category_id: category.id,
+          goal_id: goalIds[index],
+          tag_id: analysisTags.find((tag) => tag.name === "Investments")?.id ?? null
+        };
+        await api.createTransaction(token, payload);
+      }
+      setWorkspaceMessage(
+        allocations.length > 1
+          ? `${activeInvestmentTab} saved across ${allocations.length} goals.`
+          : allocations.length === 1
+            ? `${activeInvestmentTab} saved and linked to goal.`
+            : `${activeInvestmentTab} saved.`
+      );
+      setTransactionAssetForm({
+        name: "",
+        amount: "",
+        goalAllocations: []
+      });
+      await loadWorkspace({ showLoader: false });
+    } catch (caught) {
+      setWorkspaceError(
+        caught instanceof ApiError ? caught.message : `Unable to save ${activeInvestmentTab}.`
+      );
+    } finally {
+      setSavingTransactionAsset(false);
+    }
+  }
+
+  function startEditTransactionAsset(transaction: Transaction) {
+    setEditingTransactionAssetId(String(transaction.id));
+    setTransactionAssetEditForm({
+      name: transaction.merchant?.trim() || activeInvestmentTab,
+      amount: String(Math.abs(parseAmount(transaction.amount))),
+      goalId: transaction.goal_id != null ? String(transaction.goal_id) : ""
+    });
+    setWorkspaceError(null);
+    setWorkspaceMessage(null);
+  }
+
+  async function submitTransactionAssetEdit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editingTransactionAssetId) {
+      return;
+    }
+    setSavingTransactionAssetEdit(true);
+    setWorkspaceError(null);
+    setWorkspaceMessage(null);
+    try {
+      await api.updateTransaction(token, editingTransactionAssetId, {
+        merchant: transactionAssetEditForm.name.trim() || activeInvestmentTab,
+        amount: transactionAssetEditForm.amount,
+        goal_id: transactionAssetEditForm.goalId || null
+      });
+      setWorkspaceMessage(`${activeInvestmentTab} updated.`);
+      setEditingTransactionAssetId(null);
+      await loadWorkspace({ showLoader: false });
+    } catch (caught) {
+      setWorkspaceError(
+        caught instanceof ApiError ? caught.message : `Unable to update ${activeInvestmentTab}.`
+      );
+    } finally {
+      setSavingTransactionAssetEdit(false);
+    }
+  }
+
   async function submitInternationalInvestment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const allocationError = validateGoalPercentAllocations(internationalForm.goalAllocations);
@@ -2034,6 +2344,100 @@ function DashboardShell({
       setWorkspaceError(caught instanceof ApiError ? caught.message : "Unable to save international investment.");
     } finally {
       setSavingInternationalInvestment(false);
+    }
+  }
+
+  async function submitCryptoInvestment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const allocationError = validateGoalPercentAllocations(cryptoForm.goalAllocations);
+    if (allocationError) {
+      setWorkspaceError(allocationError);
+      return;
+    }
+
+    const totalQuantity = Number.parseFloat(cryptoForm.quantity);
+    if (!Number.isFinite(totalQuantity) || totalQuantity <= 0) {
+      setWorkspaceError("Enter a valid quantity.");
+      return;
+    }
+
+    setSavingCryptoInvestment(true);
+    setWorkspaceError(null);
+    setWorkspaceMessage(null);
+
+    const allocations = cryptoForm.goalAllocations;
+    const existingSiblings = symbolGoalSiblings(cryptoPortfolio?.holdings ?? [], cryptoForm.symbol);
+    const { goalIds, percents, usedExistingSiblings } = resolveSipGoalSplits({
+      pickerAllocations: allocations,
+      siblingHoldings: existingSiblings
+    });
+    const quantityShares = splitQuantityByPercents(totalQuantity, percents, 6);
+
+    try {
+      for (let index = 0; index < goalIds.length; index += 1) {
+        const quantity = quantityShares[index] ?? 0;
+        if (quantity <= 0) {
+          continue;
+        }
+        const payload: CreateCryptoInvestmentPayload = {
+          symbol: cryptoForm.symbol,
+          asset_name: cryptoForm.assetName || null,
+          goal_id: goalIds[index],
+          sector_option_id: cryptoForm.sectorOptionId || null,
+          quantity: quantityToPayload(quantity, 6),
+          avg_price: cryptoForm.avgPrice,
+          current_price: cryptoForm.currentPrice || undefined
+        };
+        await api.createCryptoInvestment(token, payload);
+      }
+      setWorkspaceMessage(
+        usedExistingSiblings
+          ? `SIP added across ${goalIds.length} existing goals.`
+          : allocations.length > 1
+            ? `Crypto investment saved across ${allocations.length} goals.`
+            : "Crypto investment saved."
+      );
+      setCryptoForm({
+        symbol: "",
+        assetName: "",
+        sectorOptionId: "",
+        quantity: "",
+        avgPrice: "",
+        currentPrice: "",
+        goalAllocations: []
+      });
+      await loadWorkspace({ showLoader: false });
+    } catch (caught) {
+      setWorkspaceError(caught instanceof ApiError ? caught.message : "Unable to save crypto investment.");
+    } finally {
+      setSavingCryptoInvestment(false);
+    }
+  }
+
+  async function fetchCryptoCurrentPrice() {
+    const symbol = cryptoForm.symbol.trim();
+    if (!symbol) {
+      setWorkspaceError("Enter crypto symbol first.");
+      return;
+    }
+    setLoadingCryptoPrice(true);
+    setWorkspaceError(null);
+    try {
+      const result = await api.fetchCryptoCurrentPrice(token, symbol);
+      setCryptoForm((current) => ({
+        ...current,
+        currentPrice: result.current_price,
+        assetName: result.name?.trim() || current.assetName
+      }));
+      setWorkspaceMessage(
+        result.name
+          ? `Fetched ${result.name} at ${result.current_price} (${result.market_symbol}).`
+          : `Fetched current price for ${result.market_symbol}.`
+      );
+    } catch (caught) {
+      setWorkspaceError(caught instanceof ApiError ? caught.message : "Unable to fetch crypto current price.");
+    } finally {
+      setLoadingCryptoPrice(false);
     }
   }
 
@@ -2188,6 +2592,15 @@ function DashboardShell({
           editUnitsOrQuantity = quantityToPayload(totalQuantity, 6);
         }
       }
+    } else if (activeInvestmentTab === "Crypto") {
+      const holding = cryptoPortfolio?.holdings.find((entry) => entry.id === holdingId);
+      if (holding) {
+        const siblings = symbolGoalSiblings(cryptoPortfolio?.holdings ?? [], holding.symbol);
+        if (siblings.length > 1) {
+          const totalQuantity = siblings.reduce((sum, entry) => sum + entry.quantity, 0);
+          editUnitsOrQuantity = quantityToPayload(totalQuantity, 6);
+        }
+      }
     }
 
     setEditingHoldingId(holdingId);
@@ -2328,6 +2741,44 @@ function DashboardShell({
           });
           setWorkspaceMessage("Holding updated.");
         }
+      } else if (activeInvestmentTab === "Crypto") {
+        const holding = cryptoPortfolio?.holdings.find((entry) => entry.id === editingHoldingId);
+        const siblings = holding ? symbolGoalSiblings(cryptoPortfolio?.holdings ?? [], holding.symbol) : [];
+        const originalGoalId = holding?.goal_id ?? null;
+        const nextGoalId = holdingEditForm.goalId || null;
+        const shouldRedistribute =
+          siblings.length > 1 && (originalGoalId ?? "") === (nextGoalId ?? "");
+
+        if (shouldRedistribute) {
+          const newTotal = Number.parseFloat(holdingEditForm.unitsOrQuantity);
+          if (!Number.isFinite(newTotal) || newTotal <= 0) {
+            throw new Error("Enter a valid total quantity.");
+          }
+          const percents = proportionsFromQuantities(siblings.map((entry) => entry.quantity));
+          const quantityShares = splitQuantityByPercents(newTotal, percents, 6);
+          for (let index = 0; index < siblings.length; index += 1) {
+            const sibling = siblings[index];
+            const quantity = quantityShares[index] ?? 0;
+            if (!sibling || quantity <= 0) {
+              continue;
+            }
+            await api.updateCryptoInvestment(token, sibling.id, {
+              quantity: quantityToPayload(quantity, 6),
+              avg_price: holdingEditForm.avgPrice,
+              goal_id: sibling.goal_id,
+              sector_option_id: holdingEditForm.optionId || null
+            });
+          }
+          setWorkspaceMessage(`Holding updated across ${siblings.length} linked goals.`);
+        } else {
+          await api.updateCryptoInvestment(token, editingHoldingId, {
+            quantity: holdingEditForm.unitsOrQuantity,
+            avg_price: holdingEditForm.avgPrice,
+            goal_id: nextGoalId,
+            sector_option_id: holdingEditForm.optionId || null
+          });
+          setWorkspaceMessage("Holding updated.");
+        }
       }
       setEditingHoldingId(null);
       await loadWorkspace({ showLoader: false });
@@ -2347,7 +2798,7 @@ function DashboardShell({
   function requestDeleteHolding(
     id: string,
     label: string,
-    assetClass: "mutual_funds" | "stocks" | "international"
+    assetClass: "mutual_funds" | "stocks" | "international" | "crypto" | "transaction_asset"
   ) {
     setHoldingPendingDelete({ id, label, assetClass });
     setWorkspaceError(null);
@@ -2366,11 +2817,18 @@ function DashboardShell({
         await api.deleteMutualFundInvestment(token, holdingPendingDelete.id);
       } else if (holdingPendingDelete.assetClass === "stocks") {
         await api.deleteStockInvestment(token, holdingPendingDelete.id);
-      } else {
+      } else if (holdingPendingDelete.assetClass === "international") {
         await api.deleteInternationalInvestment(token, holdingPendingDelete.id);
+      } else if (holdingPendingDelete.assetClass === "crypto") {
+        await api.deleteCryptoInvestment(token, holdingPendingDelete.id);
+      } else {
+        await api.deleteTransaction(token, holdingPendingDelete.id);
       }
       if (editingHoldingId === holdingPendingDelete.id) {
         setEditingHoldingId(null);
+      }
+      if (editingTransactionAssetId === holdingPendingDelete.id) {
+        setEditingTransactionAssetId(null);
       }
       setHoldingPendingDelete(null);
       setWorkspaceMessage("Holding deleted.");
@@ -2441,6 +2899,10 @@ function DashboardShell({
       setWorkspaceError("Editing TRANSFER transactions is not supported.");
       return;
     }
+    if (editingTransactionForm.transactionType === "INVESTMENT") {
+      setWorkspaceError("Edit EPF/PPF/NPS and other holdings under Investment, not Transactions.");
+      return;
+    }
     setSavingTransactionEdit(true);
     setWorkspaceError(null);
     setWorkspaceMessage(null);
@@ -2455,7 +2917,6 @@ function DashboardShell({
         category_id: editingTransactionForm.categoryId ? Number(editingTransactionForm.categoryId) : null,
         tag_id:
           editingTransactionForm.transactionType === "EXPENSE" ||
-          editingTransactionForm.transactionType === "INVESTMENT" ||
           editingTransactionForm.transactionType === "REFUND"
             ? editingTransactionForm.tagId || null
             : null,
@@ -2530,7 +2991,7 @@ function DashboardShell({
             <div className="summary-card-value">
               <strong>{formatCurrency(investmentsValue)}</strong>
             </div>
-            <p className="summary-card-note">Mutual funds, stocks &amp; international</p>
+            <p className="summary-card-note">{investmentSummaryNote}</p>
           </article>
           <article className="summary-card">
             <p>Liquid Balance</p>
@@ -2883,7 +3344,8 @@ function DashboardShell({
           <p className="eyebrow">Transaction</p>
           <h2>Transaction details</h2>
           <p className="form-hint">
-            Categories are filtered by selected transaction type (income, expense, transfer, investment, refund).
+            Categories are filtered by selected transaction type (income, expense, transfer, refund). Add
+            EPF/PPF/NPS and other holdings under Investment.
           </p>
         </div>
         <form className="workspace-form" onSubmit={submitTransaction}>
@@ -2900,17 +3362,13 @@ function DashboardShell({
                   destinationAccountId: "",
                   transferCategoryId: "",
                   categoryId: "",
-                  tagId:
-                    event.target.value === "INVESTMENT"
-                      ? analysisTags.find((tag) => tag.name === "Investments")?.id ?? ""
-                      : ""
+                  tagId: ""
                 })
               }
             >
               <option value="EXPENSE">Expense</option>
               <option value="INCOME">Income</option>
               <option value="TRANSFER">Transfer</option>
-              <option value="INVESTMENT">Investment</option>
               <option value="REFUND">Refund</option>
             </select>
           </label>
@@ -2982,7 +3440,7 @@ function DashboardShell({
               <p className="form-hint">
                 {transactionForm.transactionType === "REFUND"
                   ? "Tag the refund as a need or want so it reduces that spending bucket."
-                  : "Classify this expense as a need or want. Investments use the Investment transaction type."}
+                  : "Classify this expense as a need or want. Track EPF/PPF/NPS and other holdings under Investment."}
               </p>
               <div className="analysis-tag-options" role="radiogroup" aria-label="Spending analysis">
                 {expenseAnalysisTags.map((tag) => (
@@ -3224,19 +3682,16 @@ function DashboardShell({
                     transactionType: event.target.value as TransactionType,
                     categoryId: "",
                     tagId:
-                      event.target.value === "INVESTMENT"
-                        ? analysisTags.find((tag) => tag.name === "Investments")?.id ?? ""
-                        : event.target.value === "EXPENSE" || event.target.value === "REFUND"
-                          ? expenseAnalysisTags.some((tag) => tag.id === editingTransactionForm.tagId)
-                            ? editingTransactionForm.tagId
-                            : ""
+                      event.target.value === "EXPENSE" || event.target.value === "REFUND"
+                        ? expenseAnalysisTags.some((tag) => tag.id === editingTransactionForm.tagId)
+                          ? editingTransactionForm.tagId
                           : ""
+                        : ""
                   })
                 }
               >
                 <option value="EXPENSE">Expense</option>
                 <option value="INCOME">Income</option>
-                <option value="INVESTMENT">Investment</option>
                 <option value="REFUND">Refund</option>
               </select>
             </label>
@@ -3308,7 +3763,7 @@ function DashboardShell({
                 <p className="form-hint">
                   {editingTransactionForm.transactionType === "REFUND"
                     ? "Tag the refund as a need or want so it reduces that spending bucket."
-                    : "Classify this expense as a need or want. Investments use the Investment transaction type."}
+                    : "Classify this expense as a need or want. Track EPF/PPF/NPS and other holdings under Investment."}
                 </p>
                 <div className="analysis-tag-options" role="radiogroup" aria-label="Spending analysis">
                   {expenseAnalysisTags.map((tag) => (
@@ -3349,12 +3804,10 @@ function DashboardShell({
           </form>
         )}
         <div className="data-list">
-          {filteredTransactions.slice(0, 10).map((transaction) => {
+          {ledgerTransactions.slice(0, 10).map((transaction) => {
             const analysisLabel = transaction.tag_id
               ? analysisTagById[String(transaction.tag_id)]
-              : transaction.transaction_type === "INVESTMENT"
-                ? "Investments"
-                : null;
+              : null;
             return (
               <article key={transaction.id} className={`data-row ${transactionToneClass(transaction.transaction_type)}`}>
                 <div>
@@ -3378,7 +3831,7 @@ function DashboardShell({
               </article>
             );
           })}
-          {filteredTransactions.length === 0 && (
+          {ledgerTransactions.length === 0 && (
             <p className="form-hint">No transactions in this date range.</p>
           )}
         </div>
@@ -3585,8 +4038,8 @@ function DashboardShell({
           ) : (
             goalsByCompletion.map((goal) => {
               const target = parseAmount(goal.target_amount);
-              const current = parseAmount(goal.current_amount);
-              const progress = goalCompletionPercent(goal);
+              const current = goalCurrentAmountById.get(goal.id) ?? parseAmount(goal.current_amount);
+              const progress = goalCompletionPercent(goal, current);
               const needed = Math.max(target - current, 0);
               return (
                 <article key={goal.id} className="data-row goal-row">
@@ -3775,6 +4228,7 @@ function DashboardShell({
     const isMutualFundsTab = activeInvestmentTab === "Mutual Funds";
     const isStocksTab = activeInvestmentTab === "Stocks";
     const isInternationalTab = activeInvestmentTab === "International Investment";
+    const isCryptoTab = activeInvestmentTab === "Crypto";
 
     const categoryPills = (
       <>
@@ -3788,6 +4242,8 @@ function DashboardShell({
                 setActiveInvestmentTab(tabName);
                 setEditingHoldingId(null);
                 setHoldingPendingDelete(null);
+                setTransactionAssetForm({ name: "", amount: "", goalAllocations: [] });
+                setEditingTransactionAssetId(null);
               }}
             >
               {tabName}
@@ -3804,6 +4260,9 @@ function DashboardShell({
       const internationalCurrentUsd = parseAmount(internationalPortfolio?.total_current_value ?? "0");
       const internationalCurrentInr = usdInrRate !== null ? internationalCurrentUsd * usdInrRate : 0;
       const internationalHoldings = internationalPortfolio?.holdings ?? [];
+      const cryptoHoldings = cryptoPortfolio?.holdings ?? [];
+      const cryptoCurrentUsd = parseAmount(cryptoPortfolio?.total_current_value ?? "0");
+      const cryptoCurrentInr = usdInrRate !== null ? cryptoCurrentUsd * usdInrRate : 0;
 
       const mutualFundGoldInr = mutualFundHoldings.reduce(
         (sum, holding) =>
@@ -3886,6 +4345,8 @@ function DashboardShell({
           value = internationalTotalInr;
         } else if (label === "Gold") {
           value = goldTotalInr;
+        } else if (label === "Crypto") {
+          value = cryptoCurrentInr;
         } else if (isTransactionAssetClass(label)) {
           value = transactionValueByAssetClass[label];
         }
@@ -3967,6 +4428,12 @@ function DashboardShell({
           parseAmount(holding.current_value) * usdInrRate
         );
       }
+      for (const holding of cryptoHoldings) {
+        if (usdInrRate === null) {
+          continue;
+        }
+        addToGoalClass(holding.goal_id, "Crypto", parseAmount(holding.current_value) * usdInrRate);
+      }
       for (const transaction of transactions) {
         if (transaction.transaction_type !== "INVESTMENT" || !transaction.category_id) {
           continue;
@@ -3982,7 +4449,12 @@ function DashboardShell({
         );
       }
 
-      const goalProgressById = new Map(goals.map((goal) => [goal.id, goalCompletionPercent(goal)]));
+      const goalProgressById = new Map(
+        goals.map((goal) => [
+          goal.id,
+          goalCompletionPercent(goal, goalCurrentAmountById.get(goal.id))
+        ])
+      );
       const goalAllocations = Array.from(goalAllocationMap.values())
         .map((entry) => {
           const total = ASSET_CLASS_LABELS.reduce((sum, label) => sum + entry.byClass[label], 0);
@@ -4059,6 +4531,21 @@ function DashboardShell({
           });
         }
 
+        for (const holding of cryptoHoldings) {
+          if (!matchesGoalId(holding.goal_id, goalId) || usdInrRate === null) {
+            continue;
+          }
+          if (assetClassFilter && assetClassFilter !== "Crypto") {
+            continue;
+          }
+          rows.push({
+            id: `crypto-${holding.id}`,
+            name: holding.asset_name?.trim() || holding.symbol,
+            assetClass: "Crypto",
+            valueInr: parseAmount(holding.current_value) * usdInrRate
+          });
+        }
+
         for (const transaction of transactions) {
           if (transaction.transaction_type !== "INVESTMENT" || !transaction.category_id) {
             continue;
@@ -4107,12 +4594,16 @@ function DashboardShell({
       const internationalInvestedUsd = parseAmount(internationalPortfolio?.total_invested_amount ?? "0");
       const internationalInvestedInr =
         usdInrRate !== null ? internationalInvestedUsd * usdInrRate : 0;
+      const cryptoInvestedUsd = parseAmount(cryptoPortfolio?.total_invested_amount ?? "0");
+      const cryptoInvestedInr = usdInrRate !== null ? cryptoInvestedUsd * usdInrRate : 0;
       const transactionOnlyTotal = TRANSACTION_ASSET_CLASSES.reduce(
         (sum, label) => sum + transactionValueByAssetClass[label],
         0
       );
-      const overallInvested = mfInvested + stockInvested + internationalInvestedInr + transactionOnlyTotal;
-      const overallCurrent = mfCurrent + stockCurrent + internationalCurrentInr + transactionOnlyTotal;
+      const overallInvested =
+        mfInvested + stockInvested + internationalInvestedInr + cryptoInvestedInr + transactionOnlyTotal;
+      const overallCurrent =
+        mfCurrent + stockCurrent + internationalCurrentInr + cryptoCurrentInr + transactionOnlyTotal;
       const overallPnl = overallCurrent - overallInvested;
       const overallPnlPercent = overallInvested > 0 ? (overallPnl / overallInvested) * 100 : 0;
       const overallTone = pnlTone(overallPnl);
@@ -4391,31 +4882,587 @@ function DashboardShell({
       );
     }
 
-    if (!isMutualFundsTab && !isStocksTab && !isInternationalTab) {
+    if (isCryptoTab) {
+      const totalInvestedUsd = parseAmount(cryptoPortfolio?.total_invested_amount ?? "0");
+      const totalCurrentUsd = parseAmount(cryptoPortfolio?.total_current_value ?? "0");
+      const totalPnlUsd = parseAmount(cryptoPortfolio?.total_pnl ?? "0");
+      const totalPnlPercent = parseAmount(cryptoPortfolio?.total_pnl_percent ?? "0");
+      const totalInvestedInr = usdInrRate !== null ? totalInvestedUsd * usdInrRate : null;
+      const totalCurrentInr = usdInrRate !== null ? totalCurrentUsd * usdInrRate : null;
+      const totalPnlInr = usdInrRate !== null ? totalPnlUsd * usdInrRate : null;
+      const totalTone = pnlTone(totalPnlUsd);
+      const selectedCryptoSipSiblingCount = cryptoForm.symbol.trim()
+        ? symbolGoalSiblings(cryptoPortfolio?.holdings ?? [], cryptoForm.symbol).length
+        : 0;
+      const multiGoalSipHint =
+        "This holding is already split across goals. Leave goals empty and the new SIP units will use the same split.";
+
       return (
         <div className="investment-section-shell">
           {categoryPills}
           <section className="workspace-panel">
             <div>
               <p className="eyebrow">Investment</p>
-              <h2>Track investment categories</h2>
+              <h2>Crypto portfolio</h2>
             </div>
-            <div className="data-list">
-              {investmentTransactions.length === 0 ? (
-                <p>No transactions for {activeInvestmentTab} yet.</p>
+
+            <div className="portfolio-compose">
+              <div className="portfolio-compose-primary">
+                <form className="portfolio-compose-block portfolio-entry-form" onSubmit={submitCryptoInvestment}>
+                  <p className="portfolio-compose-label">Add holding</p>
+                  <div className="portfolio-entry-fields portfolio-entry-fields--3">
+                    <label>
+                      Symbol
+                      <input
+                        required
+                        placeholder="BTC, ETH"
+                        value={cryptoForm.symbol}
+                        onChange={(event) => setCryptoForm({ ...cryptoForm, symbol: event.target.value })}
+                      />
+                    </label>
+                    <label>
+                      Asset name
+                      <input
+                        value={cryptoForm.assetName}
+                        onChange={(event) => setCryptoForm({ ...cryptoForm, assetName: event.target.value })}
+                      />
+                    </label>
+                    <label>
+                      Sector
+                      <select
+                        value={cryptoForm.sectorOptionId}
+                        onChange={(event) => setCryptoForm({ ...cryptoForm, sectorOptionId: event.target.value })}
+                      >
+                        <option value="">No sector</option>
+                        {investmentOptions.crypto_sectors.map((option) => (
+                          <option key={option.id} value={option.id}>
+                            {option.display_name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="portfolio-entry-fields portfolio-entry-fields--4">
+                    <label>
+                      Quantity
+                      <input
+                        required
+                        min="0.000001"
+                        step="0.000001"
+                        type="number"
+                        value={cryptoForm.quantity}
+                        onChange={(event) => setCryptoForm({ ...cryptoForm, quantity: event.target.value })}
+                      />
+                    </label>
+                    <label>
+                      Avg buy price (USD)
+                      <input
+                        required
+                        min="0.000001"
+                        step="0.000001"
+                        type="number"
+                        value={cryptoForm.avgPrice}
+                        onChange={(event) => setCryptoForm({ ...cryptoForm, avgPrice: event.target.value })}
+                      />
+                    </label>
+                    <label>
+                      Current price (USD)
+                      <div className="inline-actions">
+                        <input
+                          required
+                          min="0.000001"
+                          step="0.000001"
+                          type="number"
+                          value={cryptoForm.currentPrice}
+                          onChange={(event) => setCryptoForm({ ...cryptoForm, currentPrice: event.target.value })}
+                        />
+                        <button
+                          className="subtle-action small-action"
+                          type="button"
+                          disabled={loadingCryptoPrice}
+                          onClick={() => void fetchCryptoCurrentPrice()}
+                        >
+                          {loadingCryptoPrice && <Loader2 className="spin" size={14} />}
+                          {loadingCryptoPrice ? "Fetching" : "Auto"}
+                        </button>
+                      </div>
+                    </label>
+                  </div>
+                  <button className="primary-action portfolio-entry-submit" disabled={savingCryptoInvestment} type="submit">
+                    {savingCryptoInvestment && <Loader2 className="spin" size={16} />}
+                    {savingCryptoInvestment ? "Saving" : "Add crypto"}
+                  </button>
+                </form>
+                <p className="form-hint">
+                  Note: Crypto is tracked in USD. INR figures use the latest USD/INR rate and show as N/A when the rate
+                  is unavailable.
+                </p>
+              </div>
+
+              <aside className="portfolio-compose-aside">
+                <GoalAllocationPicker
+                  goals={goalsByCompletion}
+                  allocations={cryptoForm.goalAllocations}
+                  onChange={(goalAllocations) => setCryptoForm({ ...cryptoForm, goalAllocations })}
+                  sipHint={
+                    selectedCryptoSipSiblingCount > 1 && cryptoForm.goalAllocations.length === 0
+                      ? multiGoalSipHint
+                      : null
+                  }
+                />
+              </aside>
+            </div>
+
+            <section className="dashboard-grid investment-summary-grid portfolio-summary-row" aria-label="Investment summary">
+              <article>
+                <p>Total invested (USD)</p>
+                <strong>{formatUsdCurrency(totalInvestedUsd)}</strong>
+              </article>
+              <article>
+                <p>Current value (USD)</p>
+                <strong>{formatUsdCurrency(totalCurrentUsd)}</strong>
+              </article>
+              <article className={`pnl-summary pnl-summary--${totalTone}`}>
+                <p>Total P/L (USD)</p>
+                <strong className={pnlAmountClass(totalTone)}>
+                  {formatSignedUsdCurrency(totalPnlUsd)} ({formatPnlPercent(totalPnlPercent)})
+                </strong>
+              </article>
+              <article>
+                <p>Total invested (INR)</p>
+                <strong>{totalInvestedInr === null ? "N/A" : formatCurrency(totalInvestedInr)}</strong>
+              </article>
+              <article>
+                <p>Current value (INR)</p>
+                <strong>{totalCurrentInr === null ? "N/A" : formatCurrency(totalCurrentInr)}</strong>
+              </article>
+              <article className={`pnl-summary pnl-summary--${totalTone}`}>
+                <p>Total P/L (INR)</p>
+                <strong className={pnlAmountClass(totalTone)}>
+                  {totalPnlInr === null
+                    ? "N/A"
+                    : `${formatSignedCurrency(totalPnlInr)} (${formatPnlPercent(totalPnlPercent)})`}
+                </strong>
+              </article>
+            </section>
+
+            <div className="table-wrapper">
+              {!cryptoPortfolio || cryptoPortfolio.holdings.length === 0 ? (
+                <p>No crypto holdings yet.</p>
               ) : (
-                investmentTransactions.slice(0, 10).map((transaction) => (
-                  <article key={transaction.id} className="data-row">
-                    <div>
-                      <strong>{transaction.merchant || activeInvestmentTab}</strong>
-                      <p>{new Date(transaction.date).toLocaleDateString()}</p>
-                    </div>
-                    <span className={transactionAmountClass(transaction.transaction_type)}>
-                      {transactionAmountPrefix(transaction.transaction_type)}
-                      {formatCurrency(parseAmount(transaction.amount))}
-                    </span>
-                  </article>
-                ))
+                <table className="portfolio-table">
+                  <thead>
+                    <tr>
+                      <th>Symbol</th>
+                      <th>Quantity</th>
+                      <th>Avg. Price</th>
+                      <th>Sector</th>
+                      <th>Name</th>
+                      <th>Current Price</th>
+                      <th>Invested</th>
+                      <th>Current</th>
+                      <th>Abs P&amp;L</th>
+                      <th>Abs.P&amp;L %</th>
+                      <th>Goal</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cryptoPortfolio.holdings.map((holding) => {
+                      const pnlValue = parseAmount(holding.pnl);
+                      const pnlPercent = parseAmount(holding.pnl_percent);
+                      const tone = pnlTone(pnlValue);
+                      const isEditing = editingHoldingId === holding.id;
+                      const linkedShares = linkedGoalShares(
+                        cryptoPortfolio.holdings
+                          .filter(
+                            (entry) =>
+                              entry.symbol.trim().toUpperCase() === holding.symbol.trim().toUpperCase() &&
+                              entry.goal_id != null
+                          )
+                          .map((entry) => ({
+                            goal_id: entry.goal_id,
+                            goal_name: entry.goal_name,
+                            quantity: parseAmount(entry.quantity)
+                          }))
+                      );
+                      const isMultiGoalLinked = linkedShares.length > 1;
+                      const isMultiGoalEdit = isEditing && isMultiGoalLinked;
+                      return (
+                        <Fragment key={holding.id}>
+                          <tr
+                            className={`holding-row holding-row--${tone}${isMultiGoalEdit ? " holding-row--editing-linked" : ""}`}
+                          >
+                            <td>{holding.symbol}</td>
+                            <td>
+                              {isEditing ? (
+                                <label className="table-edit-field">
+                                  {isMultiGoalEdit ? <span className="table-edit-field-label">Total qty</span> : null}
+                                  <input
+                                    className="table-edit-input"
+                                    min="0.000001"
+                                    step="0.000001"
+                                    type="number"
+                                    value={holdingEditForm.unitsOrQuantity}
+                                    onChange={(event) =>
+                                      setHoldingEditForm({ ...holdingEditForm, unitsOrQuantity: event.target.value })
+                                    }
+                                  />
+                                </label>
+                              ) : (
+                                holding.quantity
+                              )}
+                            </td>
+                            <td>
+                              {isEditing ? (
+                                <input
+                                  className="table-edit-input"
+                                  min="0.000001"
+                                  step="0.000001"
+                                  type="number"
+                                  value={holdingEditForm.avgPrice}
+                                  onChange={(event) => setHoldingEditForm({ ...holdingEditForm, avgPrice: event.target.value })}
+                                />
+                              ) : (
+                                formatUsdCurrency(parseAmount(holding.avg_price))
+                              )}
+                            </td>
+                            <td>
+                              {isEditing ? (
+                                <select
+                                  className="table-edit-input"
+                                  value={holdingEditForm.optionId}
+                                  onChange={(event) => setHoldingEditForm({ ...holdingEditForm, optionId: event.target.value })}
+                                >
+                                  <option value="">No sector</option>
+                                  {investmentOptions.crypto_sectors.map((option) => (
+                                    <option key={option.id} value={option.id}>
+                                      {option.display_name}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : (
+                                holding.sector_name ?? "-"
+                              )}
+                            </td>
+                            <td title={holding.asset_name ?? holding.symbol} className="table-text-ellipsis">
+                              {holding.asset_name ?? holding.symbol}
+                            </td>
+                            <td>{formatUsdCurrency(parseAmount(holding.current_price))}</td>
+                            <td>{formatUsdCurrency(parseAmount(holding.invested_amount))}</td>
+                            <td>{formatUsdCurrency(parseAmount(holding.current_value))}</td>
+                            <td>
+                              <span className={`pnl-chip pnl-chip--${tone}`}>{formatSignedUsdCurrency(pnlValue)}</span>
+                            </td>
+                            <td>
+                              <span className={`pnl-chip pnl-chip--${tone}`}>{formatPnlPercent(pnlPercent)}</span>
+                            </td>
+                            <td>
+                              {isMultiGoalEdit ? (
+                                <LinkedGoalsCell shares={linkedShares} />
+                              ) : isEditing ? (
+                                <select
+                                  className="table-edit-input"
+                                  value={holdingEditForm.goalId}
+                                  onChange={(event) => setHoldingEditForm({ ...holdingEditForm, goalId: event.target.value })}
+                                >
+                                  <option value="">No goal</option>
+                                  {goalsByCompletion.map((goal) => (
+                                    <option key={goal.id} value={goal.id}>
+                                      {goal.name}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : isMultiGoalLinked ? (
+                                <span className="goal-shared-label" title={linkedShares.map((share) => share.goalName).join(", ")}>
+                                  {holding.goal_name ?? "Goal"}
+                                  <span className="goal-shared-badge">shared</span>
+                                </span>
+                              ) : (
+                                holding.goal_name ?? "-"
+                              )}
+                            </td>
+                            <td>
+                              {isEditing ? (
+                                <form className="holding-edit-actions" onSubmit={submitHoldingEdit}>
+                                  <div className="inline-actions">
+                                    <button className="subtle-action small-action" type="submit" disabled={savingHoldingEdit}>
+                                      {savingHoldingEdit ? "Saving" : "Save"}
+                                    </button>
+                                    <button className="subtle-action small-action" type="button" onClick={() => setEditingHoldingId(null)}>
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </form>
+                              ) : (
+                                <div className="inline-actions holding-row-actions">
+                                  <button
+                                    className="subtle-action small-action icon-action"
+                                    type="button"
+                                    aria-label={`Edit ${holding.asset_name ?? holding.symbol}`}
+                                    title="Edit"
+                                    onClick={() =>
+                                      startEditHolding(
+                                        holding.id,
+                                        holding.quantity,
+                                        holding.avg_price,
+                                        holding.sector_option_id,
+                                        holding.goal_id
+                                      )
+                                    }
+                                  >
+                                    <Pencil size={14} />
+                                  </button>
+                                  <button
+                                    className="subtle-action small-action icon-action danger-action"
+                                    type="button"
+                                    aria-label={`Delete ${holding.asset_name ?? holding.symbol}`}
+                                    title="Delete"
+                                    onClick={() =>
+                                      requestDeleteHolding(
+                                        holding.id,
+                                        holding.asset_name ?? holding.symbol,
+                                        "crypto"
+                                      )
+                                    }
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                          {isMultiGoalEdit ? (
+                            <tr className="holding-edit-banner-row">
+                              <td colSpan={12}>
+                                Editing total quantity for this holding. On save, quantity is split across{" "}
+                                {linkedShares.map((share) => share.goalName).join(", ")} using the current percentages.
+                              </td>
+                            </tr>
+                          ) : null}
+                        </Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </section>
+        </div>
+      );
+    }
+
+    if (!isMutualFundsTab && !isStocksTab && !isInternationalTab && !isCryptoTab) {
+      const tabTotalAmount = investmentTransactions.reduce(
+        (sum, transaction) => sum + Math.abs(parseAmount(transaction.amount)),
+        0
+      );
+      return (
+        <div className="investment-section-shell">
+          {categoryPills}
+          <section className="workspace-panel">
+            <div>
+              <p className="eyebrow">Investment</p>
+              <h2>{activeInvestmentTab}</h2>
+            </div>
+            <div className="portfolio-compose">
+              <div className="portfolio-compose-primary">
+                <form
+                  className="portfolio-compose-block portfolio-entry-form"
+                  onSubmit={submitTransactionAssetInvestment}
+                >
+                  <p className="portfolio-compose-label">Add holding</p>
+                  <div className="portfolio-entry-fields portfolio-entry-fields--4">
+                    <label>
+                      Name
+                      <input
+                        required
+                        placeholder={
+                          activeInvestmentTab === "EPF/PPF/NPS" ? "EPF, PPF, or NPS" : activeInvestmentTab
+                        }
+                        value={transactionAssetForm.name}
+                        onChange={(event) =>
+                          setTransactionAssetForm({ ...transactionAssetForm, name: event.target.value })
+                        }
+                      />
+                    </label>
+                    <label>
+                      Amount
+                      <input
+                        required
+                        min="0.01"
+                        step="0.01"
+                        type="number"
+                        value={transactionAssetForm.amount}
+                        onChange={(event) =>
+                          setTransactionAssetForm({ ...transactionAssetForm, amount: event.target.value })
+                        }
+                      />
+                    </label>
+                  </div>
+                  <button className="primary-action portfolio-entry-submit" disabled={savingTransactionAsset} type="submit">
+                    {savingTransactionAsset && <Loader2 className="spin" size={16} />}
+                    {savingTransactionAsset ? "Saving" : "Add investment"}
+                  </button>
+                </form>
+              </div>
+
+              <aside className="portfolio-compose-aside">
+                <GoalAllocationPicker
+                  goals={goalsByCompletion}
+                  allocations={transactionAssetForm.goalAllocations}
+                  onChange={(goalAllocations) => setTransactionAssetForm({ ...transactionAssetForm, goalAllocations })}
+                />
+              </aside>
+            </div>
+            <section className="dashboard-grid investment-summary-grid portfolio-summary-row" aria-label="Investment summary">
+              <article>
+                <p>Total invested</p>
+                <strong>{formatCurrency(tabTotalAmount)}</strong>
+              </article>
+              <article>
+                <p>Current value</p>
+                <strong>{formatCurrency(tabTotalAmount)}</strong>
+              </article>
+              <article className="pnl-summary pnl-summary--flat">
+                <p>Holdings</p>
+                <strong>{investmentTransactions.length}</strong>
+              </article>
+            </section>
+            <div className="table-wrapper">
+              {investmentTransactions.length === 0 ? (
+                <p>No {activeInvestmentTab} holdings yet.</p>
+              ) : (
+                <table className="portfolio-table portfolio-table--compact">
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Amount</th>
+                      <th>Goal</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {investmentTransactions.map((transaction) => {
+                      const transactionId = String(transaction.id);
+                      const isEditing = editingTransactionAssetId === transactionId;
+                      const amountValue = Math.abs(parseAmount(transaction.amount));
+                      const goalId = transaction.goal_id != null ? String(transaction.goal_id) : "";
+                      const goalName = goalId ? goalNameById[goalId] : null;
+                      const holdingName = transaction.merchant || activeInvestmentTab;
+                      return (
+                        <tr key={transactionId} className="holding-row holding-row--flat">
+                          <td title={holdingName} className="table-text-ellipsis">
+                            {isEditing ? (
+                              <input
+                                className="table-edit-input"
+                                required
+                                value={transactionAssetEditForm.name}
+                                onChange={(event) =>
+                                  setTransactionAssetEditForm({
+                                    ...transactionAssetEditForm,
+                                    name: event.target.value
+                                  })
+                                }
+                              />
+                            ) : (
+                              holdingName
+                            )}
+                          </td>
+                          <td>
+                            {isEditing ? (
+                              <input
+                                className="table-edit-input"
+                                required
+                                min="0.01"
+                                step="0.01"
+                                type="number"
+                                value={transactionAssetEditForm.amount}
+                                onChange={(event) =>
+                                  setTransactionAssetEditForm({
+                                    ...transactionAssetEditForm,
+                                    amount: event.target.value
+                                  })
+                                }
+                              />
+                            ) : (
+                              formatCurrency(amountValue)
+                            )}
+                          </td>
+                          <td>
+                            {isEditing ? (
+                              <select
+                                className="table-edit-input"
+                                value={transactionAssetEditForm.goalId}
+                                onChange={(event) =>
+                                  setTransactionAssetEditForm({
+                                    ...transactionAssetEditForm,
+                                    goalId: event.target.value
+                                  })
+                                }
+                              >
+                                <option value="">No goal</option>
+                                {goalsByCompletion.map((goal) => (
+                                  <option key={goal.id} value={goal.id}>
+                                    {goal.name}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              goalName ?? "-"
+                            )}
+                          </td>
+                          <td>
+                            {isEditing ? (
+                              <form className="holding-edit-actions" onSubmit={submitTransactionAssetEdit}>
+                                <div className="inline-actions">
+                                  <button
+                                    className="subtle-action small-action"
+                                    type="submit"
+                                    disabled={savingTransactionAssetEdit}
+                                  >
+                                    {savingTransactionAssetEdit ? "Saving" : "Save"}
+                                  </button>
+                                  <button
+                                    className="subtle-action small-action"
+                                    type="button"
+                                    disabled={savingTransactionAssetEdit}
+                                    onClick={() => setEditingTransactionAssetId(null)}
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </form>
+                            ) : (
+                              <div className="inline-actions holding-row-actions">
+                                <button
+                                  className="subtle-action small-action icon-action"
+                                  type="button"
+                                  aria-label={`Edit ${holdingName}`}
+                                  title="Edit"
+                                  onClick={() => startEditTransactionAsset(transaction)}
+                                >
+                                  <Pencil size={14} />
+                                </button>
+                                <button
+                                  className="subtle-action small-action icon-action danger-action"
+                                  type="button"
+                                  aria-label={`Delete ${holdingName}`}
+                                  title="Delete"
+                                  onClick={() =>
+                                    requestDeleteHolding(transactionId, holdingName, "transaction_asset")
+                                  }
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               )}
             </div>
           </section>
@@ -5495,7 +6542,7 @@ function DashboardShell({
           </article>
           <article>
             <p>Total transactions</p>
-            <strong>{transactions.length}</strong>
+            <strong>{ledgerTransactionCount}</strong>
           </article>
           <article>
             <p>Goals count</p>
@@ -5804,8 +6851,8 @@ function DashboardShell({
                 ) : (
                   goalsByCompletion.slice(0, 4).map((goal) => {
                     const target = parseAmount(goal.target_amount);
-                    const current = parseAmount(goal.current_amount);
-                    const progress = Math.round(goalCompletionPercent(goal));
+                    const current = goalCurrentAmountById.get(goal.id) ?? parseAmount(goal.current_amount);
+                    const progress = Math.round(goalCompletionPercent(goal, current));
                     return (
                       <button
                         key={goal.id}

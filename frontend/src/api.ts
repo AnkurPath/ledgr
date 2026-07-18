@@ -10,11 +10,13 @@ import type {
   CreateInternationalInvestmentPayload,
   UpdateGoalPayload,
   CreateMutualFundInvestmentPayload,
+  CreateCryptoInvestmentPayload,
   CreateStockInvestmentPayload,
   CreateTransactionPayload,
   CreateTransactionResponse,
   SetupDefaultOpeningBalancesPayload,
   UpdateAccountPayload,
+  UpdateCryptoInvestmentPayload,
   UpdateInternationalInvestmentPayload,
   UpdateMutualFundInvestmentPayload,
   UpdateStockInvestmentPayload,
@@ -34,6 +36,8 @@ import type {
   UserProfile,
   StockInvestment,
   StockPortfolio,
+  CryptoInvestment,
+  CryptoPortfolio,
   InternationalInvestment,
   InternationalPortfolio,
   Tag
@@ -210,8 +214,10 @@ export const api = {
   listTransactions: (token: string) => request<Transaction[]>("/transactions", { token }),
   createTransaction: (token: string, body: CreateTransactionPayload) =>
     request<CreateTransactionResponse>("/transactions", { method: "POST", token, body }),
-  updateTransaction: (token: string, transactionId: number, body: UpdateTransactionPayload) =>
+  updateTransaction: (token: string, transactionId: string | number, body: UpdateTransactionPayload) =>
     request<Transaction>(`/transactions/${transactionId}`, { method: "PATCH", token, body }),
+  deleteTransaction: (token: string, transactionId: string | number) =>
+    request<void>(`/transactions/${transactionId}`, { method: "DELETE", token }),
   searchMutualFunds: (token: string, query: string, limit = 20) =>
     request<MutualFundSearchItem[]>(
       `/investments/mutual-funds/search?q=${encodeURIComponent(query)}&limit=${encodeURIComponent(String(limit))}`,
@@ -245,6 +251,15 @@ export const api = {
   listInternationalPortfolio: (token: string) => request<InternationalPortfolio>("/investments/international", { token }),
   fetchInternationalCurrentPrice: (token: string, symbol: string) =>
     request<CurrentPrice>(`/investments/international/current-price?symbol=${encodeURIComponent(symbol)}`, { token }),
+  createCryptoInvestment: (token: string, body: CreateCryptoInvestmentPayload) =>
+    request<CryptoInvestment>("/investments/crypto", { method: "POST", token, body }),
+  updateCryptoInvestment: (token: string, investmentId: string, body: UpdateCryptoInvestmentPayload) =>
+    request<CryptoInvestment>(`/investments/crypto/${investmentId}`, { method: "PATCH", token, body }),
+  deleteCryptoInvestment: (token: string, investmentId: string) =>
+    request<void>(`/investments/crypto/${investmentId}`, { method: "DELETE", token }),
+  listCryptoPortfolio: (token: string) => request<CryptoPortfolio>("/investments/crypto", { token }),
+  fetchCryptoCurrentPrice: (token: string, symbol: string) =>
+    request<CurrentPrice>(`/investments/crypto/current-price?symbol=${encodeURIComponent(symbol)}`, { token }),
   refreshInvestmentPrices: (token: string) =>
     request<InvestmentPriceRefresh>("/investments/refresh-prices", { method: "POST", token }),
   listInvestmentOptions: (token: string) => request<InvestmentOptionsCatalog>("/investments/options", { token })

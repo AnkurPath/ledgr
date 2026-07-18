@@ -2972,6 +2972,21 @@ button.category-spend-row {
   font-size: 0.82rem;
 }
 
+.portfolio-table--compact {
+  min-width: 0;
+}
+
+.portfolio-table--compact th:last-child,
+.portfolio-table--compact td:last-child {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.portfolio-table tbody tr.holding-row--flat:hover {
+  background: var(--lavender-soft);
+}
+
 .portfolio-table thead th {
   position: sticky;
   top: 0;

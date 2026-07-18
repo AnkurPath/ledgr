@@ -15,6 +15,7 @@ from sqlalchemy.exc import ProgrammingError
 from sqlmodel import Session, select
 
 from ledgr.features.investments.models import (
+    CryptoInvestmentModel,
     InvestmentOptionModel,
     InternationalInvestmentModel,
     MutualFundDataModel,
@@ -22,6 +23,10 @@ from ledgr.features.investments.models import (
     StockInvestmentModel,
 )
 from ledgr.features.investments.schemas import (
+    CryptoInvestmentHolding,
+    CryptoInvestmentPortfolioResponse,
+    CryptoInvestmentUpdateRequest,
+    CryptoInvestmentUpsertRequest,
     InvestmentPriceRefreshResponse,
     InvestmentOptionCreate,
     InvestmentOptionResponse,
@@ -39,7 +44,8 @@ from ledgr.features.investments.schemas import (
     StockInvestmentUpdateRequest,
     StockInvestmentUpsertRequest,
 )
-from ledgr.features.users.models import GoalModel
+from ledgr.features.transactions.models import TransactionModel
+from ledgr.features.users.models import CategoryModel, GoalModel
 from ledgr.utils.mfdata import refresh_mutual_fund_nav
 
 THREE_DECIMAL_PLACES = Decimal("0.001")
@@ -47,6 +53,13 @@ SIX_DECIMAL_PLACES = Decimal("0.000001")
 TWO_DECIMAL_PLACES = Decimal("0.01")
 HUNDRED = Decimal("100")
 ZERO = Decimal("0")
+USD_INR_SYMBOL = "INR=X"
+# Keep in sync with frontend TRANSACTION_ASSET_CLASSES used by Investment Overview.
+TRANSACTION_GOAL_ASSET_CLASSES = {
+    "EPF/PPF/NPS",
+    "Fixed Deposit",
+    "Real Estate",
+}
 YAHOO_HOSTS = ("query1.finance.yahoo.com", "query2.finance.yahoo.com")
 YAHOO_COOKIE_URL = "https://fc.yahoo.com"
 YAHOO_USER_AGENT = "Mozilla/5.0"
@@ -112,6 +125,13 @@ DEFAULT_MUTUAL_FUND_CATEGORIES = (
     "International Fund",
     "Other",
 )
+DEFAULT_CRYPTO_SECTORS = (
+    "Bitcoin",
+    "Ethereum",
+    "Altcoin",
+    "Stablecoin",
+    "Other",
+)
 
 
 def quantize_three_places(value: Decimal) -> Decimal:
@@ -131,6 +151,11 @@ def _is_missing_international_table_error(exc: ProgrammingError) -> bool:
     return "international_investments" in message and "does not exist" in message
 
 
+def _is_missing_crypto_table_error(exc: ProgrammingError) -> bool:
+    message = str(exc).lower()
+    return "crypto_investments" in message and "does not exist" in message
+
+
 def _empty_international_portfolio_response() -> InternationalInvestmentPortfolioResponse:
     return InternationalInvestmentPortfolioResponse(
         holdings=[],
@@ -139,6 +164,25 @@ def _empty_international_portfolio_response() -> InternationalInvestmentPortfoli
         total_pnl=ZERO,
         total_pnl_percent=ZERO,
     )
+
+
+def _empty_crypto_portfolio_response() -> CryptoInvestmentPortfolioResponse:
+    return CryptoInvestmentPortfolioResponse(
+        holdings=[],
+        total_invested_amount=ZERO,
+        total_current_value=ZERO,
+        total_pnl=ZERO,
+        total_pnl_percent=ZERO,
+    )
+
+
+def normalize_crypto_symbol(symbol: str) -> str:
+    raw = symbol.strip().upper()
+    if not raw:
+        return raw
+    if "-" in raw or raw.endswith("=X"):
+        return raw
+    return f"{raw}-USD"
 
 
 def _normalize_dimension(value: str) -> str:
@@ -153,6 +197,7 @@ def ensure_default_investment_options(session: Session) -> None:
         ("stock", "sector", DEFAULT_STOCK_SECTORS),
         ("international", "sector", DEFAULT_INTERNATIONAL_SECTORS),
         ("mutual_fund", "category", DEFAULT_MUTUAL_FUND_CATEGORIES),
+        ("crypto", "sector", DEFAULT_CRYPTO_SECTORS),
     )
     created_any = False
     for asset_type, field_name, values in defaults:
@@ -196,6 +241,7 @@ def list_investment_options_catalog(session: Session) -> InvestmentOptionsCatalo
     stock_sectors: list[InvestmentOptionResponse] = []
     international_sectors: list[InvestmentOptionResponse] = []
     mutual_fund_categories: list[InvestmentOptionResponse] = []
+    crypto_sectors: list[InvestmentOptionResponse] = []
     for option in options:
         if option.asset_type == "stock" and option.field_name == "sector":
             stock_sectors.append(InvestmentOptionResponse.model_validate(option, from_attributes=True))
@@ -203,19 +249,22 @@ def list_investment_options_catalog(session: Session) -> InvestmentOptionsCatalo
             international_sectors.append(InvestmentOptionResponse.model_validate(option, from_attributes=True))
         elif option.asset_type == "mutual_fund" and option.field_name == "category":
             mutual_fund_categories.append(InvestmentOptionResponse.model_validate(option, from_attributes=True))
+        elif option.asset_type == "crypto" and option.field_name == "sector":
+            crypto_sectors.append(InvestmentOptionResponse.model_validate(option, from_attributes=True))
 
     return InvestmentOptionsCatalogResponse(
         stock_sectors=stock_sectors,
         international_sectors=international_sectors,
         mutual_fund_categories=mutual_fund_categories,
+        crypto_sectors=crypto_sectors,
     )
 
 
 def create_investment_option(*, session: Session, payload: InvestmentOptionCreate) -> InvestmentOptionModel:
     asset_type = payload.asset_type.strip().lower().replace("-", "_").replace(" ", "_")
     field_name = _normalize_dimension(payload.field_name)
-    if asset_type not in {"stock", "mutual_fund", "international"}:
-        raise ValueError("Unsupported asset_type. Use 'stock', 'mutual_fund', or 'international'.")
+    if asset_type not in {"stock", "mutual_fund", "international", "crypto"}:
+        raise ValueError("Unsupported asset_type. Use 'stock', 'mutual_fund', 'international', or 'crypto'.")
     if field_name not in {"sector", "category"}:
         raise ValueError("Unsupported field_name. Use 'sector' or 'category'.")
 
@@ -821,6 +870,175 @@ def list_international_portfolio(
     )
 
 
+def upsert_crypto_investment(
+    *,
+    session: Session,
+    user_id: UUID,
+    payload: CryptoInvestmentUpsertRequest,
+) -> CryptoInvestmentModel:
+    symbol = normalize_crypto_symbol(payload.symbol)
+    quantity = quantize_six_places(payload.quantity)
+    avg_price = quantize_three_places(payload.avg_price)
+    asset_name = payload.asset_name.strip() if payload.asset_name else None
+
+    if payload.current_price is None:
+        _, current_price, fetched_name = fetch_current_price(symbol=symbol, market="US")
+        if not asset_name and fetched_name:
+            asset_name = fetched_name
+    else:
+        current_price = quantize_three_places(payload.current_price)
+
+    existing = session.exec(
+        select(CryptoInvestmentModel).where(
+            CryptoInvestmentModel.user_id == user_id,
+            CryptoInvestmentModel.symbol == symbol,
+            CryptoInvestmentModel.goal_id == payload.goal_id,
+        )
+    ).first()
+
+    if existing is None:
+        investment = CryptoInvestmentModel(
+            user_id=user_id,
+            goal_id=payload.goal_id,
+            sector_option_id=payload.sector_option_id,
+            symbol=symbol,
+            asset_name=asset_name,
+            quantity=quantity,
+            avg_price=avg_price,
+            current_price=current_price,
+        )
+        session.add(investment)
+        session.commit()
+        session.refresh(investment)
+        recalculate_goal_current_amount(session=session, user_id=user_id, goal_id=investment.goal_id)
+        return investment
+
+    total_quantity = quantize_six_places(existing.quantity + quantity)
+    total_cost = (existing.quantity * existing.avg_price) + (quantity * avg_price)
+    existing.quantity = total_quantity
+    existing.avg_price = quantize_three_places(total_cost / total_quantity)
+    existing.current_price = current_price
+    existing.sector_option_id = payload.sector_option_id
+    if asset_name:
+        existing.asset_name = asset_name
+
+    session.add(existing)
+    session.commit()
+    session.refresh(existing)
+    recalculate_goal_current_amount(session=session, user_id=user_id, goal_id=existing.goal_id)
+    return existing
+
+
+def list_crypto_portfolio(
+    *,
+    session: Session,
+    user_id: UUID,
+) -> CryptoInvestmentPortfolioResponse:
+    statement = (
+        select(CryptoInvestmentModel, GoalModel, InvestmentOptionModel)
+        .outerjoin(GoalModel, GoalModel.id == CryptoInvestmentModel.goal_id)
+        .outerjoin(InvestmentOptionModel, InvestmentOptionModel.id == CryptoInvestmentModel.sector_option_id)
+        .where(CryptoInvestmentModel.user_id == user_id)
+        .order_by(CryptoInvestmentModel.created_at.desc())
+    )
+    try:
+        rows = session.exec(statement).all()
+    except ProgrammingError as exc:
+        if _is_missing_crypto_table_error(exc):
+            session.rollback()
+            return _empty_crypto_portfolio_response()
+        raise
+
+    holdings: list[CryptoInvestmentHolding] = []
+    total_invested = ZERO
+    total_current = ZERO
+
+    for investment, goal, sector_option in rows:
+        invested_amount = quantize_two_places(investment.quantity * investment.avg_price)
+        current_value = quantize_two_places(investment.quantity * investment.current_price)
+        pnl = quantize_two_places(current_value - invested_amount)
+        pnl_percent = ZERO
+        if invested_amount > ZERO:
+            pnl_percent = quantize_two_places((pnl / invested_amount) * HUNDRED)
+
+        holdings.append(
+            CryptoInvestmentHolding(
+                id=investment.id,
+                symbol=investment.symbol,
+                asset_name=investment.asset_name,
+                goal_id=investment.goal_id,
+                goal_name=goal.name if goal else None,
+                sector_option_id=investment.sector_option_id,
+                sector_name=sector_option.display_name if sector_option else None,
+                quantity=investment.quantity,
+                avg_price=investment.avg_price,
+                current_price=investment.current_price,
+                invested_amount=invested_amount,
+                current_value=current_value,
+                pnl=pnl,
+                pnl_percent=pnl_percent,
+            )
+        )
+        total_invested += invested_amount
+        total_current += current_value
+
+    total_invested = quantize_two_places(total_invested)
+    total_current = quantize_two_places(total_current)
+    total_pnl = quantize_two_places(total_current - total_invested)
+    total_pnl_percent = ZERO
+    if total_invested > ZERO:
+        total_pnl_percent = quantize_two_places((total_pnl / total_invested) * HUNDRED)
+
+    return CryptoInvestmentPortfolioResponse(
+        holdings=holdings,
+        total_invested_amount=total_invested,
+        total_current_value=total_current,
+        total_pnl=total_pnl,
+        total_pnl_percent=total_pnl_percent,
+    )
+
+
+def update_crypto_investment(
+    *,
+    session: Session,
+    user_id: UUID,
+    investment_id: UUID,
+    payload: CryptoInvestmentUpdateRequest,
+) -> CryptoInvestmentModel:
+    investment = session.get(CryptoInvestmentModel, investment_id)
+    if investment is None or investment.user_id != user_id:
+        raise LookupError("Crypto investment not found")
+
+    previous_goal_id = investment.goal_id
+    investment.quantity = quantize_six_places(payload.quantity)
+    investment.avg_price = quantize_three_places(payload.avg_price)
+    if payload.current_price is not None:
+        investment.current_price = quantize_three_places(payload.current_price)
+    if "goal_id" in payload.model_fields_set:
+        investment.goal_id = payload.goal_id
+    if "sector_option_id" in payload.model_fields_set:
+        investment.sector_option_id = payload.sector_option_id
+
+    session.add(investment)
+    session.commit()
+    session.refresh(investment)
+    recalculate_goal_current_amount(session=session, user_id=user_id, goal_id=investment.goal_id)
+    if previous_goal_id is not None and previous_goal_id != investment.goal_id:
+        recalculate_goal_current_amount(session=session, user_id=user_id, goal_id=previous_goal_id)
+    return investment
+
+
+def delete_crypto_investment(*, session: Session, user_id: UUID, investment_id: UUID) -> None:
+    investment = session.get(CryptoInvestmentModel, investment_id)
+    if investment is None or investment.user_id != user_id:
+        raise LookupError("Crypto investment not found")
+
+    goal_id = investment.goal_id
+    session.delete(investment)
+    session.commit()
+    recalculate_goal_current_amount(session=session, user_id=user_id, goal_id=goal_id)
+
+
 def refresh_investment_prices_for_user(*, session: Session, user_id: UUID) -> InvestmentPriceRefreshResponse:
     latest_nav_date = (
         session.exec(select(MutualFundDataModel.date).order_by(MutualFundDataModel.date.desc()).limit(1)).first()
@@ -842,6 +1060,9 @@ def refresh_investment_prices_for_user(*, session: Session, user_id: UUID) -> In
     international_total = 0
     international_updated = 0
     international_failed = 0
+    crypto_total = 0
+    crypto_updated = 0
+    crypto_failed = 0
     goal_ids_to_recalculate: set[UUID] = set()
 
     stock_holdings = session.exec(select(StockInvestmentModel).where(StockInvestmentModel.user_id == user_id)).all()
@@ -906,6 +1127,41 @@ def refresh_investment_prices_for_user(*, session: Session, user_id: UUID) -> In
             if investment.goal_id is not None:
                 goal_ids_to_recalculate.add(investment.goal_id)
 
+    try:
+        crypto_holdings = session.exec(
+            select(CryptoInvestmentModel).where(CryptoInvestmentModel.user_id == user_id)
+        ).all()
+    except ProgrammingError as exc:
+        if _is_missing_crypto_table_error(exc):
+            session.rollback()
+            crypto_holdings = []
+        else:
+            raise
+    crypto_total = len(crypto_holdings)
+    for investment in crypto_holdings:
+        try:
+            _, current_price, fetched_name = fetch_current_price(
+                symbol=investment.symbol,
+                market="US",
+            )
+        except MarketDataUnavailable:
+            crypto_failed += 1
+            continue
+
+        changed = False
+        normalized_price = quantize_three_places(current_price)
+        if investment.current_price != normalized_price:
+            investment.current_price = normalized_price
+            changed = True
+        if fetched_name and fetched_name.strip() and fetched_name.strip() != (investment.asset_name or "").strip():
+            investment.asset_name = fetched_name.strip()
+            changed = True
+        if changed:
+            session.add(investment)
+            crypto_updated += 1
+            if investment.goal_id is not None:
+                goal_ids_to_recalculate.add(investment.goal_id)
+
     if should_refresh_nav:
         mf_goal_ids = session.exec(
             select(MutualFundInvestmentModel.goal_id).where(MutualFundInvestmentModel.user_id == user_id)
@@ -914,7 +1170,7 @@ def refresh_investment_prices_for_user(*, session: Session, user_id: UUID) -> In
             if goal_id is not None:
                 goal_ids_to_recalculate.add(goal_id)
 
-    if stocks_updated > 0 or international_updated > 0:
+    if stocks_updated > 0 or international_updated > 0 or crypto_updated > 0:
         session.commit()
 
     for goal_id in goal_ids_to_recalculate:
@@ -936,6 +1192,9 @@ def refresh_investment_prices_for_user(*, session: Session, user_id: UUID) -> In
         international_total=international_total,
         international_updated=international_updated,
         international_failed=international_failed,
+        crypto_total=crypto_total,
+        crypto_updated=crypto_updated,
+        crypto_failed=crypto_failed,
     )
 
 
@@ -1060,6 +1319,16 @@ def delete_international_investment(*, session: Session, user_id: UUID, investme
     recalculate_goal_current_amount(session=session, user_id=user_id, goal_id=goal_id)
 
 
+def _usd_inr_rate() -> Optional[Decimal]:
+    try:
+        _, rate, _ = fetch_current_price(symbol=USD_INR_SYMBOL, market="US")
+    except (MarketDataUnavailable, MarketDataRateLimited):
+        return None
+    if rate <= ZERO:
+        return None
+    return rate
+
+
 def recalculate_goal_current_amount(*, session: Session, user_id: UUID, goal_id: Optional[UUID]) -> None:
     if goal_id is None:
         return
@@ -1107,10 +1376,59 @@ def recalculate_goal_current_amount(*, session: Session, user_id: UUID, goal_id:
             international_rows = []
         else:
             raise
+    # Match Investment Overview: international is USD, convert to INR when rate is available.
     international_total = ZERO
-    for investment in international_rows:
-        international_total += quantize_two_places(investment.quantity * investment.current_price)
+    usd_inr_rate = _usd_inr_rate() if international_rows else None
+    if usd_inr_rate is not None:
+        for investment in international_rows:
+            current_value_usd = quantize_two_places(investment.quantity * investment.current_price)
+            international_total += quantize_two_places(current_value_usd * usd_inr_rate)
 
-    goal.current_amount = quantize_two_places(mf_total + stock_total + international_total)
+    crypto_statement = select(CryptoInvestmentModel).where(
+        CryptoInvestmentModel.user_id == user_id,
+        CryptoInvestmentModel.goal_id == goal_id,
+    )
+    try:
+        crypto_rows = session.exec(crypto_statement).all()
+    except ProgrammingError as exc:
+        if _is_missing_crypto_table_error(exc):
+            session.rollback()
+            crypto_rows = []
+        else:
+            raise
+    # Crypto quotes are USD; convert to INR when rate is available (same as overview).
+    crypto_total = ZERO
+    crypto_rate = usd_inr_rate if usd_inr_rate is not None else (_usd_inr_rate() if crypto_rows else None)
+    if crypto_rate is not None:
+        for investment in crypto_rows:
+            current_value_usd = quantize_two_places(investment.quantity * investment.current_price)
+            crypto_total += quantize_two_places(current_value_usd * crypto_rate)
+
+    transaction_rows = session.exec(
+        select(TransactionModel, CategoryModel)
+        .outerjoin(CategoryModel, CategoryModel.id == TransactionModel.category_id)
+        .where(
+            TransactionModel.user_id == user_id,
+            TransactionModel.goal_id == goal_id,
+            TransactionModel.transaction_type == "INVESTMENT",
+        )
+    ).all()
+    transaction_total = ZERO
+    counted_transaction_rows = 0
+    for transaction, category in transaction_rows:
+        if category is None or category.name not in TRANSACTION_GOAL_ASSET_CLASSES:
+            continue
+        counted_transaction_rows += 1
+        transaction_total += quantize_two_places(abs(transaction.amount))
+
+    has_linked_assets = bool(
+        mf_rows or stock_rows or international_rows or crypto_rows or counted_transaction_rows
+    )
+    if not has_linked_assets:
+        return
+
+    goal.current_amount = quantize_two_places(
+        mf_total + stock_total + international_total + crypto_total + transaction_total
+    )
     session.add(goal)
     session.commit()

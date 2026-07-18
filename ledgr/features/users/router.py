@@ -38,6 +38,7 @@ from ledgr.features.users.schemas import (
     NetWorthOverviewResponse,
 )
 from ledgr.features.users.networth import get_net_worth_overview
+from ledgr.utils.globaldata import ensure_epf_ppf_nps_category
 
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -300,6 +301,7 @@ def list_categories(
     current_user: UserModel = Depends(get_current_user)
 ) -> CategoryGroupsResponse:
     user_id = current_user.id
+    ensure_epf_ppf_nps_category(session)
     statement = select(CategoryModel).where((CategoryModel.user_id == user_id) | (CategoryModel.is_global == True))
     if kind is not None:
         statement = statement.where(CategoryModel.kind == kind)

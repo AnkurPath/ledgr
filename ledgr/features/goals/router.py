@@ -6,6 +6,7 @@ from uuid import UUID
 from ledgr.core.db import get_session
 from ledgr.core.security import get_current_user
 from ledgr.features.goals.service import list_goal_templates
+from ledgr.features.investments.service import recalculate_goal_current_amount
 from ledgr.features.users.models import GoalModel, UserModel
 from ledgr.features.users.schemas import GoalCreate, GoalResponse, GoalTemplateResponse, GoalUpdate
 
@@ -26,7 +27,11 @@ def list_goals(
     current_user: UserModel = Depends(get_current_user),
 ) -> list[GoalModel]:
     statement = select(GoalModel).where(GoalModel.user_id == current_user.id)
-    return list(session.exec(statement).all())
+    goals = list(session.exec(statement).all())
+    for goal in goals:
+        recalculate_goal_current_amount(session=session, user_id=current_user.id, goal_id=goal.id)
+        session.refresh(goal)
+    return goals
 
 
 @router.post("", response_model=GoalResponse, status_code=status.HTTP_201_CREATED)

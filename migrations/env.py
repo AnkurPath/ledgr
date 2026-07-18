@@ -20,6 +20,7 @@ from ledgr.models import (UserModel,
                           MutualFundInvestmentModel,
                           StockInvestmentModel,
                           InternationalInvestmentModel,
+                          CryptoInvestmentModel,
                           NetWorthModel,
                           RefreshTokenModel,
                           )

@@ -660,3 +660,137 @@ def test_investment_options_can_be_used_for_stock_and_mutual_fund() -> None:
     assert mf_portfolio.status_code == 200
     assert mf_portfolio.json()["holdings"][0]["category_option_id"] == mf_category_id
     assert mf_portfolio.json()["holdings"][0]["category_name"] is not None
+
+
+def test_crypto_investment_upsert_and_portfolio_pnl() -> None:
+    client = make_test_client()
+    token = register_user(client, email="crypto-pnl@example.com")
+    headers = auth_headers(token)
+
+    options = client.get("/investments/options", headers=headers).json()
+    assert "crypto_sectors" in options
+    assert len(options["crypto_sectors"]) > 0
+    sector_id = options["crypto_sectors"][0]["id"]
+
+    created = client.post(
+        "/investments/crypto",
+        json={
+            "symbol": "BTC",
+            "asset_name": "Bitcoin",
+            "sector_option_id": sector_id,
+            "quantity": "0.500000",
+            "avg_price": "40000.000",
+            "current_price": "42000.000",
+        },
+        headers=headers,
+    )
+    assert created.status_code == 201
+    body = created.json()
+    assert body["symbol"] == "BTC-USD"
+    assert body["quantity"] == "0.500000"
+
+    portfolio = client.get("/investments/crypto", headers=headers)
+    assert portfolio.status_code == 200
+    data = portfolio.json()
+    assert data["total_invested_amount"] == "20000.00"
+    assert data["total_current_value"] == "21000.00"
+    assert data["total_pnl"] == "1000.00"
+    assert data["holdings"][0]["sector_option_id"] == sector_id
+
+
+def test_same_crypto_symbol_can_be_added_under_different_goals() -> None:
+    client = make_test_client()
+    token = register_user(client, email="crypto-two-goals@example.com")
+    headers = auth_headers(token)
+
+    retirement = client.post(
+        "/goals",
+        json={"name": "Retirement", "target_amount": "5000000.00"},
+        headers=headers,
+    ).json()
+    travel = client.post(
+        "/goals",
+        json={"name": "Travel", "target_amount": "300000.00"},
+        headers=headers,
+    ).json()
+
+    first = client.post(
+        "/investments/crypto",
+        json={
+            "symbol": "ETH",
+            "asset_name": "Ethereum",
+            "goal_id": retirement["id"],
+            "quantity": "2.000000",
+            "avg_price": "2000.000",
+            "current_price": "2200.000",
+        },
+        headers=headers,
+    )
+    second = client.post(
+        "/investments/crypto",
+        json={
+            "symbol": "ETH",
+            "asset_name": "Ethereum",
+            "goal_id": travel["id"],
+            "quantity": "1.000000",
+            "avg_price": "2100.000",
+            "current_price": "2200.000",
+        },
+        headers=headers,
+    )
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert first.json()["id"] != second.json()["id"]
+
+    holdings = client.get("/investments/crypto", headers=headers).json()["holdings"]
+    assert len(holdings) == 2
+    by_goal = {holding["goal_name"]: holding for holding in holdings}
+    assert by_goal["Retirement"]["quantity"] == "2.000000"
+    assert by_goal["Travel"]["quantity"] == "1.000000"
+
+
+def test_crypto_investment_updates_goal_current_amount() -> None:
+    from decimal import Decimal
+
+    from ledgr.features.investments import service as investment_service
+
+    client = make_test_client()
+    token = register_user(client, email="crypto-goal@example.com")
+    headers = auth_headers(token)
+
+    goal = client.post(
+        "/goals",
+        json={"name": "Crypto Fund", "target_amount": "1000000.00"},
+        headers=headers,
+    ).json()
+
+    original_fetch = investment_service.fetch_current_price
+
+    def fake_fetch_current_price(*, symbol: str, exchange=None, market: str = "IN"):
+        del exchange
+        del market
+        if symbol.upper() == "INR=X":
+            return symbol, Decimal("85.000"), "USD/INR"
+        return symbol, Decimal("100.000"), None
+
+    investment_service.fetch_current_price = fake_fetch_current_price
+    try:
+        created = client.post(
+            "/investments/crypto",
+            json={
+                "symbol": "BTC",
+                "goal_id": goal["id"],
+                "quantity": "1.000000",
+                "avg_price": "100.000",
+                "current_price": "100.000",
+            },
+            headers=headers,
+        )
+        assert created.status_code == 201
+        goals = client.get("/goals", headers=headers).json()
+    finally:
+        investment_service.fetch_current_price = original_fetch
+
+    crypto_goal = next(item for item in goals if item["id"] == goal["id"])
+    # 1 * 100 USD * 85 INR = 8500
+    assert crypto_goal["current_amount"] == "8500.00"

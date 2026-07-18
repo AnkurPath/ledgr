@@ -7,7 +7,8 @@ from sqlmodel import Session, select
 
 from ledgr.core.db import get_session
 from ledgr.core.security import get_current_user
-from ledgr.features.users.models import AccountModel, CategoryModel
+from ledgr.features.investments.service import recalculate_goal_current_amount
+from ledgr.features.users.models import AccountModel, CategoryModel, GoalModel
 from ledgr.features.transactions.models import TransactionModel
 from ledgr.features.transactions.schemas import (
     TransactionCreate,
@@ -21,6 +22,13 @@ from ledgr.features.transactions.schemas import (
 router = APIRouter(prefix="/transactions", tags=["transactions"])
 
 ACCOUNT_TRANSFER_CATEGORY_NAMES = {"A/C Transfer", "Cash Withdrawal", "Business"}
+# Holdings tracked in Investment tabs — record balances without debiting cash/bank accounts.
+PORTFOLIO_INVESTMENT_CATEGORY_NAMES = {
+    "EPF/PPF/NPS",
+    "Provident Fund",
+    "Fixed Deposit",
+    "Real Estate",
+}
 TRANSACTION_KIND_MAP = {
     TransactionTypeEnum.INCOME: "income",
     TransactionTypeEnum.EXPENSE: "expense",
@@ -88,10 +96,23 @@ def validate_category_kind(category: Optional[CategoryModel], transaction_type: 
         )
 
 
-def account_balance_impact(transaction_type: TransactionTypeEnum, amount: Decimal) -> Decimal:
+def is_portfolio_investment_category(category: Optional[CategoryModel]) -> bool:
+    return category is not None and category.name in PORTFOLIO_INVESTMENT_CATEGORY_NAMES
+
+
+def account_balance_impact(
+    transaction_type: TransactionTypeEnum,
+    amount: Decimal,
+    *,
+    category: Optional[CategoryModel] = None,
+) -> Decimal:
     if transaction_type in {TransactionTypeEnum.INCOME, TransactionTypeEnum.REFUND}:
         return amount
-    if transaction_type in {TransactionTypeEnum.EXPENSE, TransactionTypeEnum.INVESTMENT}:
+    if transaction_type == TransactionTypeEnum.EXPENSE:
+        return -amount
+    if transaction_type == TransactionTypeEnum.INVESTMENT:
+        if is_portfolio_investment_category(category):
+            return Decimal("0.00")
         return -amount
     return Decimal("0.00")
 
@@ -192,6 +213,12 @@ def create_transaction(
 
     account = get_owned_account(session, payload.account_id, user_id)
 
+    if payload.goal_id is not None:
+        goal = session.get(GoalModel, payload.goal_id)
+        if goal is None or goal.user_id != user_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Goal not found")
+
+    account_changed = False
     if payload.transaction_type == TransactionTypeEnum.EXPENSE:
         if account.current_balance < payload.amount:
             raise HTTPException(
@@ -199,20 +226,28 @@ def create_transaction(
                 detail="Insufficient funds in the selected account"
             )
         account.current_balance -= payload.amount
+        account_changed = True
         message = "Expense transaction created"
     elif payload.transaction_type == TransactionTypeEnum.INVESTMENT:
-        if account.current_balance < payload.amount:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Insufficient funds in the selected account",
-            )
-        account.current_balance -= payload.amount
-        message = "Investment transaction created"
+        if is_portfolio_investment_category(category):
+            # EPF/PPF/NPS and similar holdings are recorded as portfolio data, not cash outflows.
+            message = "Investment holding recorded"
+        else:
+            if account.current_balance < payload.amount:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Insufficient funds in the selected account",
+                )
+            account.current_balance -= payload.amount
+            account_changed = True
+            message = "Investment transaction created"
     elif payload.transaction_type == TransactionTypeEnum.INCOME:
         account.current_balance += payload.amount
+        account_changed = True
         message = "Income transaction created"
     elif payload.transaction_type == TransactionTypeEnum.REFUND:
         account.current_balance += payload.amount
+        account_changed = True
         message = "Refund transaction created"
     elif payload.transaction_type == TransactionTypeEnum.TRANSFER:
         if account.current_balance < payload.amount:
@@ -221,16 +256,12 @@ def create_transaction(
                 detail="Insufficient funds in the selected account",
             )
         account.current_balance -= payload.amount
+        account_changed = True
         message = "Transfer transaction created"
     else:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported transaction type")
 
-    if payload.transaction_type in {
-        TransactionTypeEnum.INCOME,
-        TransactionTypeEnum.EXPENSE,
-        TransactionTypeEnum.INVESTMENT,
-        TransactionTypeEnum.REFUND,
-    }:
+    if account_changed:
         session.add(account)
     transaction = build_transaction(
         payload=payload,
@@ -241,6 +272,9 @@ def create_transaction(
     session.add(transaction)
     session.commit()
     session.refresh(transaction)
+
+    if payload.transaction_type == TransactionTypeEnum.INVESTMENT and payload.goal_id is not None:
+        recalculate_goal_current_amount(session=session, user_id=user_id, goal_id=payload.goal_id)
 
     return TransactionCreateResponse(message=message, transactions=[transaction])
 
@@ -273,14 +307,19 @@ def update_transaction(
     next_amount = payload.amount if payload.amount is not None else transaction.amount
     category_field_updated = "category_id" in payload.model_fields_set
     next_category = get_available_category(session, payload.category_id, user_id) if payload.category_id else None
+    current_category = (
+        get_available_category(session, transaction.category_id, user_id)
+        if transaction.category_id is not None
+        else None
+    )
     if category_field_updated and payload.category_id is not None:
         validate_category_kind(next_category, next_type)
-    elif not category_field_updated and transaction.category_id is not None:
-        existing_category = get_available_category(session, transaction.category_id, user_id)
-        validate_category_kind(existing_category, next_type)
+    elif not category_field_updated and current_category is not None:
+        validate_category_kind(current_category, next_type)
+        next_category = current_category
 
-    old_impact = account_balance_impact(current_type, transaction.amount)
-    next_impact = account_balance_impact(next_type, next_amount)
+    old_impact = account_balance_impact(current_type, transaction.amount, category=current_category)
+    next_impact = account_balance_impact(next_type, next_amount, category=next_category)
 
     if old_account.id == next_account.id:
         projected_balance = old_account.current_balance - old_impact + next_impact
@@ -304,6 +343,12 @@ def update_transaction(
         session.add(old_account)
         session.add(next_account)
 
+    previous_goal_id = transaction.goal_id
+    if "goal_id" in payload.model_fields_set and payload.goal_id is not None:
+        goal = session.get(GoalModel, payload.goal_id)
+        if goal is None or goal.user_id != user_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Goal not found")
+
     values = payload.model_dump(exclude_unset=True)
     if "transaction_type" in values:
         values["transaction_type"] = values["transaction_type"].value
@@ -313,4 +358,57 @@ def update_transaction(
     session.add(transaction)
     session.commit()
     session.refresh(transaction)
+
+    if TransactionTypeEnum(transaction.transaction_type) == TransactionTypeEnum.INVESTMENT:
+        recalculate_goal_current_amount(session=session, user_id=user_id, goal_id=transaction.goal_id)
+        if previous_goal_id is not None and previous_goal_id != transaction.goal_id:
+            recalculate_goal_current_amount(session=session, user_id=user_id, goal_id=previous_goal_id)
+
     return transaction
+
+
+@router.delete("/{transaction_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_transaction(
+    transaction_id: UUID,
+    session: Session = Depends(get_session),
+    current_user: dict = Depends(get_current_user),
+) -> None:
+    user_id = current_user.id
+    transaction = session.get(TransactionModel, transaction_id)
+    if not transaction or transaction.user_id != user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found")
+
+    if TransactionTypeEnum(transaction.transaction_type) == TransactionTypeEnum.TRANSFER:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Deleting TRANSFER transactions is not supported",
+        )
+
+    category = (
+        get_available_category(session, transaction.category_id, user_id)
+        if transaction.category_id is not None
+        else None
+    )
+    impact = account_balance_impact(
+        TransactionTypeEnum(transaction.transaction_type),
+        transaction.amount,
+        category=category,
+    )
+    if impact != 0:
+        account = get_owned_account(session, transaction.account_id, user_id)
+        projected_balance = account.current_balance - impact
+        if projected_balance < 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Unable to delete transaction because account balance would become negative",
+            )
+        account.current_balance = projected_balance
+        session.add(account)
+
+    goal_id = transaction.goal_id
+    transaction_type = TransactionTypeEnum(transaction.transaction_type)
+    session.delete(transaction)
+    session.commit()
+
+    if transaction_type == TransactionTypeEnum.INVESTMENT:
+        recalculate_goal_current_amount(session=session, user_id=user_id, goal_id=goal_id)

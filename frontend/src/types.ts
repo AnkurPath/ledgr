@@ -155,6 +155,8 @@ export type NetWorthOverview = {
   mutual_funds_value: string;
   stocks_value: string;
   international_value: string;
+  crypto_value: string;
+  other_investments_value: string;
   as_of: string;
   history: NetWorthHistoryPoint[];
 };
@@ -169,17 +171,17 @@ export type CreateBudgetPayload = {
 };
 
 export type Transaction = {
-  id: number;
-  user_id: number;
+  id: string | number;
+  user_id: string | number;
   date: string;
   merchant: string | null;
   product: string | null;
   amount: string;
-  account_id: number;
+  account_id: string | number;
   transaction_type: TransactionType;
-  category_id: number | null;
+  category_id: string | number | null;
   tag_id: string | number | null;
-  goal_id: number | null;
+  goal_id: string | number | null;
   notes: string | null;
   bills: string | null;
   created_at: string;
@@ -191,13 +193,13 @@ export type CreateTransactionPayload = {
   merchant?: string | null;
   product?: string | null;
   amount: string;
-  account_id?: number | null;
-  source_account_id?: number | null;
-  destination_account_id?: number | null;
+  account_id?: string | number | null;
+  source_account_id?: string | number | null;
+  destination_account_id?: string | number | null;
   transaction_type: TransactionType;
-  category_id?: number | null;
+  category_id?: string | number | null;
   tag_id?: string | number | null;
-  goal_id?: number | null;
+  goal_id?: string | null;
   notes?: string | null;
   bills?: string | null;
 };
@@ -353,6 +355,9 @@ export type InvestmentPriceRefresh = {
   international_total: number;
   international_updated: number;
   international_failed: number;
+  crypto_total?: number;
+  crypto_updated?: number;
+  crypto_failed?: number;
 };
 
 export type InvestmentOption = {
@@ -368,6 +373,64 @@ export type InvestmentOptionsCatalog = {
   stock_sectors: InvestmentOption[];
   international_sectors: InvestmentOption[];
   mutual_fund_categories: InvestmentOption[];
+  crypto_sectors: InvestmentOption[];
+};
+
+export type CreateCryptoInvestmentPayload = {
+  symbol: string;
+  asset_name?: string | null;
+  goal_id?: string | null;
+  sector_option_id?: string | null;
+  quantity: string;
+  avg_price: string;
+  current_price?: string;
+};
+
+export type UpdateCryptoInvestmentPayload = {
+  quantity: string;
+  avg_price: string;
+  current_price?: string;
+  goal_id?: string | null;
+  sector_option_id?: string | null;
+};
+
+export type CryptoInvestment = {
+  id: string;
+  user_id: string;
+  goal_id: string | null;
+  sector_option_id: string | null;
+  symbol: string;
+  asset_name: string | null;
+  quantity: string;
+  avg_price: string;
+  current_price: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CryptoPortfolioHolding = {
+  id: string;
+  symbol: string;
+  asset_name: string | null;
+  goal_id: string | null;
+  goal_name: string | null;
+  sector_option_id: string | null;
+  sector_name: string | null;
+  quantity: string;
+  avg_price: string;
+  current_price: string;
+  invested_amount: string;
+  current_value: string;
+  pnl: string;
+  pnl_percent: string;
+};
+
+export type CryptoPortfolio = {
+  holdings: CryptoPortfolioHolding[];
+  total_invested_amount: string;
+  total_current_value: string;
+  total_pnl: string;
+  total_pnl_percent: string;
 };
 
 export type CreateInternationalInvestmentPayload = {

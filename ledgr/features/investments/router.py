@@ -9,6 +9,10 @@ from ledgr.features.investments.models import MutualFundDataModel
 from ledgr.features.users.models import GoalModel
 from ledgr.features.users.models import UserModel
 from ledgr.features.investments.schemas import (
+    CryptoInvestmentPortfolioResponse,
+    CryptoInvestmentUpdateRequest,
+    CryptoInvestmentUpsertRequest,
+    CryptoInvestmentUpsertResponse,
     CurrentPriceResponse,
     InvestmentPriceRefreshResponse,
     InvestmentOptionCreate,
@@ -31,21 +35,26 @@ from ledgr.features.investments.schemas import (
 from ledgr.features.investments.service import (
     MarketDataRateLimited,
     MarketDataUnavailable,
+    normalize_crypto_symbol,
     create_investment_option,
+    delete_crypto_investment,
     delete_international_investment,
     delete_mutual_fund_investment,
     delete_stock_investment,
     fetch_current_price,
     get_investment_option_by_id,
+    list_crypto_portfolio,
     list_international_portfolio,
     list_investment_options_catalog,
     list_mutual_fund_portfolio,
     list_stock_portfolio,
     refresh_investment_prices_for_user,
     search_mutual_funds,
+    update_crypto_investment,
     update_international_investment,
     update_mutual_fund_investment,
     update_stock_investment,
+    upsert_crypto_investment,
     upsert_international_investment,
     upsert_stock_investment,
     upsert_mutual_fund_investment,
@@ -308,6 +317,118 @@ def get_international_current_price(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     return CurrentPriceResponse(
         symbol=symbol.upper(),
+        market_symbol=market_symbol,
+        current_price=current_price,
+        name=name,
+    )
+
+
+@router.post(
+    "/crypto",
+    response_model=CryptoInvestmentUpsertResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def add_crypto_investment(
+    payload: CryptoInvestmentUpsertRequest,
+    session: Session = Depends(get_session),
+    current_user: UserModel = Depends(get_current_user),
+) -> CryptoInvestmentUpsertResponse:
+    if payload.goal_id is not None:
+        goal = session.get(GoalModel, payload.goal_id)
+        if goal is None or goal.user_id != current_user.id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Goal not found")
+    if payload.sector_option_id is not None:
+        sector = get_investment_option_by_id(
+            session=session,
+            option_id=payload.sector_option_id,
+            asset_type="crypto",
+            field_name="sector",
+        )
+        if sector is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Crypto sector not found")
+
+    investment = upsert_crypto_investment(
+        session=session,
+        user_id=current_user.id,
+        payload=payload,
+    )
+    return CryptoInvestmentUpsertResponse.model_validate(investment, from_attributes=True)
+
+
+@router.get("/crypto", response_model=CryptoInvestmentPortfolioResponse)
+def list_crypto_investments(
+    session: Session = Depends(get_session),
+    current_user: UserModel = Depends(get_current_user),
+) -> CryptoInvestmentPortfolioResponse:
+    return list_crypto_portfolio(session=session, user_id=current_user.id)
+
+
+@router.patch("/crypto/{investment_id}", response_model=CryptoInvestmentUpsertResponse)
+def patch_crypto_investment(
+    investment_id: UUID,
+    payload: CryptoInvestmentUpdateRequest,
+    session: Session = Depends(get_session),
+    current_user: UserModel = Depends(get_current_user),
+) -> CryptoInvestmentUpsertResponse:
+    if payload.goal_id is not None:
+        goal = session.get(GoalModel, payload.goal_id)
+        if goal is None or goal.user_id != current_user.id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Goal not found")
+    if payload.sector_option_id is not None:
+        sector = get_investment_option_by_id(
+            session=session,
+            option_id=payload.sector_option_id,
+            asset_type="crypto",
+            field_name="sector",
+        )
+        if sector is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Crypto sector not found")
+
+    try:
+        investment = update_crypto_investment(
+            session=session,
+            user_id=current_user.id,
+            investment_id=investment_id,
+            payload=payload,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return CryptoInvestmentUpsertResponse.model_validate(investment, from_attributes=True)
+
+
+@router.delete("/crypto/{investment_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_crypto_investment(
+    investment_id: UUID,
+    session: Session = Depends(get_session),
+    current_user: UserModel = Depends(get_current_user),
+) -> None:
+    try:
+        delete_crypto_investment(
+            session=session,
+            user_id=current_user.id,
+            investment_id=investment_id,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get("/crypto/current-price", response_model=CurrentPriceResponse)
+def get_crypto_current_price(
+    symbol: str = Query(min_length=1, max_length=25),
+    session: Session = Depends(get_session),
+    current_user: UserModel = Depends(get_current_user),
+) -> CurrentPriceResponse:
+    del session
+    del current_user
+    normalized = normalize_crypto_symbol(symbol)
+    try:
+        market_symbol, current_price, name = fetch_current_price(symbol=normalized, market="US")
+    except MarketDataRateLimited as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
+    except (MarketDataUnavailable, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    return CurrentPriceResponse(
+        symbol=normalized,
         market_symbol=market_symbol,
         current_price=current_price,
         name=name,

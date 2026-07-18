@@ -11,11 +11,21 @@ from ledgr.features.investments.service import (
     MarketDataRateLimited,
     MarketDataUnavailable,
 )
-from ledgr.features.users.models import AccountModel, NetWorthModel
+from ledgr.features.transactions.models import TransactionModel
+from ledgr.features.users.models import AccountModel, CategoryModel, NetWorthModel
 
 TWO_PLACES = Decimal("0.01")
 ZERO = Decimal("0.00")
 USD_INR_SYMBOL = "INR=X"
+# EPF/PPF/NPS, FD, etc. are recorded as INVESTMENT transactions (not MF/stock tables).
+OTHER_INVESTMENT_CATEGORY_NAMES = frozenset(
+    {
+        "EPF/PPF/NPS",
+        "Provident Fund",
+        "Fixed Deposit",
+        "Real Estate",
+    }
+)
 
 
 def _quantize(value: Decimal) -> Decimal:
@@ -36,6 +46,22 @@ def _usd_inr_rate() -> Decimal | None:
     return rate
 
 
+def _other_investments_value(*, session: Session, user_id: UUID) -> Decimal:
+    rows = session.exec(
+        select(TransactionModel, CategoryModel)
+        .join(CategoryModel, CategoryModel.id == TransactionModel.category_id)
+        .where(
+            TransactionModel.user_id == user_id,
+            TransactionModel.transaction_type == "INVESTMENT",
+            CategoryModel.name.in_(OTHER_INVESTMENT_CATEGORY_NAMES),
+        )
+    ).all()
+    total = ZERO
+    for transaction, _category in rows:
+        total += abs(transaction.amount)
+    return _quantize(total)
+
+
 def compute_net_worth(*, session: Session, user_id: UUID) -> dict[str, Decimal]:
     accounts = session.exec(select(AccountModel).where(AccountModel.user_id == user_id)).all()
     accounts_value = _quantize(sum((account.current_balance for account in accounts), ZERO))
@@ -49,20 +75,34 @@ def compute_net_worth(*, session: Session, user_id: UUID) -> dict[str, Decimal]:
     international_value_usd = investment_service.list_international_portfolio(
         session=session, user_id=user_id
     ).total_current_value
+    crypto_value_usd = investment_service.list_crypto_portfolio(
+        session=session, user_id=user_id
+    ).total_current_value
 
-    # International holdings are priced in USD; convert to INR before summing.
+    # International and crypto holdings are priced in USD; convert to INR before summing.
     usd_inr_rate = _usd_inr_rate()
     international_value = (
         _quantize(international_value_usd * usd_inr_rate) if usd_inr_rate is not None else ZERO
     )
+    crypto_value = _quantize(crypto_value_usd * usd_inr_rate) if usd_inr_rate is not None else ZERO
+    other_investments_value = _other_investments_value(session=session, user_id=user_id)
 
-    net_worth = _quantize(accounts_value + mutual_funds_value + stocks_value + international_value)
+    net_worth = _quantize(
+        accounts_value
+        + mutual_funds_value
+        + stocks_value
+        + international_value
+        + crypto_value
+        + other_investments_value
+    )
     return {
         "net_worth": net_worth,
         "accounts_value": accounts_value,
         "mutual_funds_value": mutual_funds_value,
         "stocks_value": stocks_value,
         "international_value": international_value,
+        "crypto_value": crypto_value,
+        "other_investments_value": other_investments_value,
     }
 
 

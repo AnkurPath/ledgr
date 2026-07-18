@@ -62,7 +62,7 @@ DEFAULT_CATEGORIES = [
     {"category": "investment", "name": "Fixed Deposit"},
     {"category": "investment", "name": "Real Estate"},
     {"category": "investment", "name": "Crypto"},
-    {"category": "investment", "name": "Provident Fund"},
+    {"category": "investment", "name": "EPF/PPF/NPS"},
     
     # REFUND
     {"category": "refund", "name": "Split Payback"},
@@ -84,9 +84,40 @@ DEFAULT_TAGS = [
 ]
 
 
+def ensure_epf_ppf_nps_category(session: Session) -> None:
+    """Rename legacy Provident Fund investment category to EPF/PPF/NPS."""
+    legacy_rows = session.exec(
+        select(CategoryModel).where(
+            CategoryModel.kind == "investment",
+            CategoryModel.name == "Provident Fund",
+        )
+    ).all()
+    if not legacy_rows:
+        return
+
+    changed = False
+    for category in legacy_rows:
+        conflict = session.exec(
+            select(CategoryModel).where(
+                CategoryModel.kind == "investment",
+                CategoryModel.name == "EPF/PPF/NPS",
+                CategoryModel.is_global == category.is_global,
+                CategoryModel.user_id == category.user_id,
+            )
+        ).first()
+        if conflict is not None:
+            continue
+        category.name = "EPF/PPF/NPS"
+        session.add(category)
+        changed = True
+    if changed:
+        session.commit()
+
+
 def seed_global_categories(session: Session):
     existing = session.exec(select(CategoryModel).where(CategoryModel.is_global == True)).first()
     if existing:
+        ensure_epf_ppf_nps_category(session)
         print("Global categories already seeded.")
         return
 
