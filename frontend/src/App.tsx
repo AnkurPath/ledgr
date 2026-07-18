@@ -545,6 +545,111 @@ function AllocationDonutChart({
   );
 }
 
+function AllocationBarChart({
+  items,
+  activeLabel,
+  onSelect,
+  height = 220,
+  centerValue,
+  centerLabel,
+  ariaLabel
+}: {
+  items: AllocationItem[];
+  activeLabel: string | null;
+  onSelect: (label: string) => void;
+  height?: number;
+  centerValue?: string;
+  centerLabel?: string;
+  ariaLabel: string;
+}) {
+  const bars = items.filter((item) => item.value > 0);
+  const total = bars.reduce((sum, item) => sum + item.value, 0);
+  const maxValue = Math.max(...bars.map((item) => item.value), 1);
+  const plottedBars = bars.map((item) => {
+    const share = total > 0 ? (item.value / total) * 100 : 0;
+    const heightPercent = Math.max((item.value / maxValue) * 100, 6);
+    return { ...item, share, heightPercent };
+  });
+  const linePoints = plottedBars
+    .map((item, index) => {
+      const x = ((index + 0.5) / plottedBars.length) * 100;
+      const y = 100 - item.heightPercent;
+      return `${x},${y}`;
+    })
+    .join(" ");
+
+  return (
+    <div className="allocation-bar-chart" style={{ minHeight: height }}>
+      {(centerValue || centerLabel) && (
+        <div className="allocation-bar-summary">
+          {centerValue ? <strong>{centerValue}</strong> : null}
+          {centerLabel ? <span>{centerLabel}</span> : null}
+        </div>
+      )}
+      <div className="allocation-bar-plot" role="img" aria-label={ariaLabel}>
+        {plottedBars.length === 0 ? (
+          <div className="allocation-bar-empty">No allocation data</div>
+        ) : (
+          <>
+            <div className="allocation-bar-canvas">
+              {plottedBars.length > 1 && (
+                <svg
+                  className="allocation-bar-trend"
+                  viewBox="0 0 100 100"
+                  preserveAspectRatio="none"
+                  aria-hidden="true"
+                >
+                  <polyline
+                    className="allocation-bar-trend-line"
+                    points={linePoints}
+                    fill="none"
+                    vectorEffect="non-scaling-stroke"
+                  />
+                </svg>
+              )}
+              {plottedBars.map((item) => {
+                const isActive = activeLabel === item.label;
+                return (
+                  <button
+                    key={item.label}
+                    type="button"
+                    data-allocation-interactive="true"
+                    className={`allocation-bar-group${isActive ? " active" : ""}${activeLabel && !isActive ? " dimmed" : ""}`}
+                    onClick={() => onSelect(item.label)}
+                    aria-label={`${item.label}: ${item.share.toFixed(1)}%`}
+                    title={`${item.label}: ${item.share.toFixed(1)}%`}
+                  >
+                    <span className="allocation-bar-track">
+                      <span
+                        className="allocation-bar-point"
+                        style={{ bottom: `${item.heightPercent}%` }}
+                      >
+                        <span className="allocation-bar-percent">{item.share.toFixed(1)}%</span>
+                        <span className="allocation-bar-dot" style={{ backgroundColor: item.color }} />
+                      </span>
+                      <span
+                        className="allocation-bar"
+                        style={{ height: `${item.heightPercent}%`, backgroundColor: item.color }}
+                      />
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="allocation-bar-labels">
+              {plottedBars.map((item) => (
+                <span key={`label-${item.label}`} className="allocation-bar-label">
+                  {item.label}
+                </span>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function formatSignedCurrency(value: number) {
   if (value > 0) {
     return `+${formatCurrency(value)}`;
@@ -4639,15 +4744,14 @@ function DashboardShell({
               <article className="investment-allocation-card">
                 <p className="investment-allocation-title">Portfolio asset allocation (INR)</p>
                 <div className="investment-allocation-visual">
-                  <AllocationDonutChart
+                  <AllocationBarChart
                     items={allocationItems}
                     activeLabel={allocationFocus}
                     onSelect={(label) => {
                       setGoalAllocationFocus(null);
                       setAllocationFocus((current) => (current === label ? null : label));
                     }}
-                    size={220}
-                    explodeDistance={12}
+                    height={220}
                     centerValue={formatCurrency(allocationCenterValue)}
                     centerLabel={allocationCenterLabel}
                     ariaLabel="Portfolio asset allocation"

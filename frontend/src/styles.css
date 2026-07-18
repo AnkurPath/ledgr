@@ -2299,9 +2299,9 @@ button.legend-row.interactive:focus-visible {
 
 .investment-allocation-card {
   display: grid;
-  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  grid-template-columns: minmax(260px, 1.1fr) minmax(0, 0.9fr);
   gap: 16px;
-  align-items: center;
+  align-items: stretch;
 }
 
 .investment-allocation-title {
@@ -2313,7 +2313,196 @@ button.legend-row.interactive:focus-visible {
 
 .investment-allocation-visual {
   display: flex;
+  min-width: 0;
+}
+
+.allocation-bar-chart {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+}
+
+.allocation-bar-summary {
+  display: grid;
+  gap: 2px;
+  text-align: left;
+}
+
+.allocation-bar-summary strong {
+  font-size: 1rem;
+  color: var(--ink);
+  line-height: 1.2;
+}
+
+.allocation-bar-summary span {
+  font-size: 0.72rem;
+  color: var(--muted);
+  line-height: 1.3;
+}
+
+.allocation-bar-plot {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  gap: 8px;
+  min-height: 0;
+  height: 100%;
+}
+
+.allocation-bar-empty {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.allocation-bar-canvas {
+  position: relative;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  align-items: stretch;
+  gap: 8px;
+  min-height: 120px;
+  height: 100%;
+  padding-top: 22px;
+}
+
+.allocation-bar-trend {
+  position: absolute;
+  inset: 22px 0 0;
+  width: 100%;
+  height: calc(100% - 22px);
+  pointer-events: none;
+  z-index: 2;
+  overflow: visible;
+}
+
+.allocation-bar-trend-line {
+  stroke: var(--ink);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.72;
+}
+
+.allocation-bar-group {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  align-items: stretch;
+  justify-items: center;
+  height: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  transition: opacity 180ms ease;
+}
+
+.allocation-bar-group.dimmed {
+  opacity: 0.4;
+}
+
+.allocation-bar-group.active {
+  opacity: 1;
+  z-index: 3;
+}
+
+.allocation-bar-track {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
   justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+
+.allocation-bar {
+  display: block;
+  width: 100%;
+  max-width: 36px;
+  border-radius: 8px 8px 4px 4px;
+  min-height: 8px;
+  transition:
+    height 280ms ease,
+    transform 140ms ease,
+    filter 140ms ease;
+}
+
+.allocation-bar-point {
+  position: absolute;
+  left: 50%;
+  z-index: 3;
+  width: 0;
+  height: 0;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.allocation-bar-percent {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(17, 17, 17, 0.88);
+  color: #fff;
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+
+.allocation-bar-dot {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(17, 17, 17, 0.18);
+  transform: translate(-50%, -50%);
+}
+
+.allocation-bar-group:hover .allocation-bar,
+.allocation-bar-group.active .allocation-bar,
+.allocation-bar-group:focus-visible .allocation-bar {
+  transform: scaleX(1.06);
+  filter: brightness(1.05);
+}
+
+.allocation-bar-group:focus-visible {
+  outline: none;
+}
+
+.allocation-bar-labels {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+
+.allocation-bar-label {
+  color: var(--muted);
+  font-size: 0.62rem;
+  font-weight: 600;
+  text-align: center;
+  line-height: 1.2;
+  max-width: 100%;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .allocation-donut-wrap {
