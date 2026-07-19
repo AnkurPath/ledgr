@@ -1,0 +1,128 @@
+{{- if .Values.backend.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ledgr.backend.fullname" . }}
+  labels:
+    {{- include "ledgr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  replicas: {{ .Values.backend.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ledgr.backend.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ledgr.backend.selectorLabels" . | nindent 8 }}
+      {{- with .Values.backend.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.cnpg.enabled }}
+      volumes:
+        - name: dburl
+          emptyDir: {}
+      initContainers:
+        {{- if .Values.cnpg.waitForReady }}
+        - name: wait-for-cnpg
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              host={{ include "ledgr.cnpg.rwService" . | quote }}
+              echo "Waiting for CloudNativePG at ${host}:5432 ..."
+              until nc -z "$host" 5432; do
+                sleep 2
+              done
+              echo "PostgreSQL is reachable."
+        {{- end }}
+        # CNPG secret "uri" is postgresql://... (URL-encoded). Ledgr needs postgresql+psycopg://.
+        - name: prepare-db-url
+          image: busybox:1.36
+          env:
+            - name: PG_URI
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ledgr.cnpg.appSecret" . }}
+                  key: uri
+          command:
+            - sh
+            - -c
+            - |
+              echo "$PG_URI" | sed 's|^postgresql://|postgresql+psycopg://|' > /shared/LEDGR_DATABASE_URL
+              echo "Prepared LEDGR_DATABASE_URL from CloudNativePG secret {{ include "ledgr.cnpg.appSecret" . }}"
+          volumeMounts:
+            - name: dburl
+              mountPath: /shared
+      {{- end }}
+      containers:
+        - name: backend
+          image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+          imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            {{- range $key, $value := .Values.backend.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            - name: LEDGR_CORS_ORIGINS
+              value: {{ .Values.allowedOrigins | quote }}
+          {{- if or .Values.backend.createSecret .Values.backend.existingSecretName }}
+          envFrom:
+            - secretRef:
+                name: {{ include "ledgr.backend.secretName" . }}
+          {{- end }}
+          {{- if .Values.cnpg.enabled }}
+          volumeMounts:
+            - name: dburl
+              mountPath: /shared
+              readOnly: true
+          # Load DB URL prepared from the in-namespace CNPG secret, then start the app.
+          command:
+            - sh
+            - -c
+            - |
+              export LEDGR_DATABASE_URL="$(cat /shared/LEDGR_DATABASE_URL)"
+              exec sh -c 'uv run python scripts/bootstrap_db.py && uv run uvicorn ledgr.app:app --host 0.0.0.0 --port 8000'
+          {{- end }}
+          {{- if .Values.backend.livenessProbe.enabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.backend.livenessProbe.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.backend.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.backend.livenessProbe.periodSeconds }}
+          {{- end }}
+          {{- if .Values.backend.readinessProbe.enabled }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.backend.readinessProbe.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.backend.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.backend.readinessProbe.periodSeconds }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.backend.resources | nindent 12 }}
+      {{- with .Values.backend.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.backend.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.backend.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

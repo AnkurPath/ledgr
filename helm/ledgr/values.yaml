@@ -1,45 +1,108 @@
-replicaCount: 1
+nameOverride: ""
+fullnameOverride: ""
 
-image:
-  repository: ghcr.io/ankur/ledgr
-  tag: "latest"
-  pullPolicy: IfNotPresent
+# Comma-separated browser origins allowed to call the API (LEDGR_CORS_ORIGINS).
+# Example: "https://ledgr.example.com,https://www.ledgr.example.com"
+allowedOrigins: "http://localhost:3000"
 
-service:
-  type: ClusterIP
-  port: 8000
+imagePullSecrets: []
 
-resources: {}
-
-podAnnotations: {}
-nodeSelector: {}
-tolerations: []
-affinity: {}
-
-env:
-  LEDGR_ENV: "production"
-  ALGORITHM: "HS256"
-  ACCESS_TOKEN_EXPIRE_MINUTES: "30"
-  REFRESH_TOKEN_EXPIRE_DAYS: "30"
-
-# Sensitive values. Override these at install time (e.g. --set-string) or via an
-# existing secret. Do NOT commit real credentials here. With LEDGR_ENV=production
-# the app refuses to start unless LEDGR_JWT_SECRET_KEY and LEDGR_DATABASE_URL are set.
-secretEnv:
-  LEDGR_JWT_SECRET_KEY: ""
-  LEDGR_DATABASE_URL: ""
-
-createSecret: true
-existingSecretName: ""
-
-livenessProbe:
+# ---------------------------------------------------------------------------
+# Backend (FastAPI)
+# ---------------------------------------------------------------------------
+backend:
   enabled: true
-  path: /health
-  initialDelaySeconds: 20
-  periodSeconds: 20
+  replicaCount: 1
 
-readinessProbe:
+  image:
+    repository: ghcr.io/ankur/ledgr
+    tag: "latest"
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+    port: 8000
+
+  resources: {}
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+  env:
+    LEDGR_ENV: "production"
+    ALGORITHM: "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: "30"
+    REFRESH_TOKEN_EXPIRE_DAYS: "30"
+
+  # Sensitive values. Override at install time, e.g.:
+  #   --set-string backend.secretEnv.LEDGR_JWT_SECRET_KEY="$(openssl rand -hex 32)"
+  # When cnpg.enabled=true, LEDGR_DATABASE_URL is built automatically from the
+  # CloudNativePG <cluster>-app secret and must not be set here.
+  secretEnv:
+    LEDGR_JWT_SECRET_KEY: ""
+    # Only used when cnpg.enabled=false:
+    # LEDGR_DATABASE_URL: "postgresql+psycopg://user:pass@host:5432/ledgr"
+
+  createSecret: true
+  # Use an existing Secret instead of creating one from secretEnv.
+  existingSecretName: ""
+
+  # Optional override of the CNPG app secret name (defaults to <cnpg.name>-app).
+  databaseSecretName: ""
+
+  livenessProbe:
+    enabled: true
+    path: /health
+    initialDelaySeconds: 20
+    periodSeconds: 20
+
+  readinessProbe:
+    enabled: true
+    path: /health
+    initialDelaySeconds: 10
+    periodSeconds: 10
+
+# ---------------------------------------------------------------------------
+# Frontend (nginx static)
+# ---------------------------------------------------------------------------
+# VITE_API_BASE_URL is a build-time arg on the frontend image. Build the image
+# with the public API URL, or leave it empty and serve API + UI behind one origin.
+frontend:
   enabled: true
-  path: /health
-  initialDelaySeconds: 10
-  periodSeconds: 10
+  replicaCount: 1
+
+  image:
+    repository: ghcr.io/ankur/ledgr-frontend
+    tag: "latest"
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+    port: 80
+
+  resources: {}
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ---------------------------------------------------------------------------
+# CloudNativePG (requires the CNPG operator already installed in the cluster)
+# ---------------------------------------------------------------------------
+cnpg:
+  enabled: true
+  # Cluster name → Services: <name>-rw / <name>-ro / <name>-r
+  # App credentials Secret: <name>-app (used automatically by the backend)
+  name: ledgr-db
+  instances: 1
+  # Leave empty to use the operator default PostgreSQL image.
+  imageName: ""
+  database: ledgr
+  owner: ledgr
+  storage:
+    size: 10Gi
+    storageClass: ""
+  resources: {}
+  # Wait for the RW service before starting the backend.
+  waitForReady: true

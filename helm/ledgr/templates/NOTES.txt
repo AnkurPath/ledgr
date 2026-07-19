@@ -1,13 +1,40 @@
-1. Get the application URL by running these commands:
+Ledgr has been deployed to namespace {{ .Release.Namespace }}.
 
-{{- if contains "NodePort" .Values.service.type }}
-  export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "ledgr.fullname" . }})
-  export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
-  echo http://$NODE_IP:$NODE_PORT
-{{- else if contains "LoadBalancer" .Values.service.type }}
-  NOTE: It may take a few minutes for the LoadBalancer IP to be available.
-  kubectl get svc --namespace {{ .Release.Namespace }} {{ include "ledgr.fullname" . }} -w
-{{- else }}
-  kubectl port-forward --namespace {{ .Release.Namespace }} svc/{{ include "ledgr.fullname" . }} 8000:{{ .Values.service.port }}
-  echo http://127.0.0.1:8000
+{{- if .Values.cnpg.enabled }}
+
+Database (CloudNativePG):
+  Cluster:  {{ include "ledgr.cnpg.name" . }}
+  RW svc:   {{ include "ledgr.cnpg.rwService" . }}.{{ .Release.Namespace }}.svc
+  Secret:   {{ include "ledgr.cnpg.appSecret" . }}  (credentials; backend uses this automatically)
 {{- end }}
+
+{{- if .Values.backend.enabled }}
+
+Backend:
+  Service:  {{ include "ledgr.backend.fullname" . }}:{{ .Values.backend.service.port }}
+  CORS:     {{ .Values.allowedOrigins | quote }}
+
+  Port-forward:
+    kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "ledgr.backend.fullname" . }} 8000:{{ .Values.backend.service.port }}
+    # then open http://127.0.0.1:8000/health
+{{- end }}
+
+{{- if .Values.frontend.enabled }}
+
+Frontend:
+  Service:  {{ include "ledgr.frontend.fullname" . }}:{{ .Values.frontend.service.port }}
+
+  Port-forward:
+    kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "ledgr.frontend.fullname" . }} 3000:{{ .Values.frontend.service.port }}
+    # then open http://127.0.0.1:3000
+{{- end }}
+
+Install / upgrade tips:
+  # Set JWT secret and allowed browser origins
+  helm upgrade --install {{ .Release.Name }} ./helm/ledgr \
+    --namespace {{ .Release.Namespace }} \
+    --set-string backend.secretEnv.LEDGR_JWT_SECRET_KEY="$(openssl rand -hex 32)" \
+    --set-string allowedOrigins="https://app.example.com"
+
+Prerequisite: the CloudNativePG operator must already be installed in the cluster
+when cnpg.enabled=true.
