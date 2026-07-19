@@ -58,7 +58,13 @@ import type {
 type AuthMode = "login" | "register";
 type PublicView = "landing" | "auth";
 type DashboardSection = "Dashboard" | "Transaction" | "Investment" | "Budget" | "Goal" | "Accounts" | "Profile";
-type TransactionDatePreset = "this_month" | "last_month" | "this_year" | "custom";
+type TransactionDatePreset =
+  | "this_month"
+  | "last_month"
+  | "last_3_months"
+  | "last_6_months"
+  | "this_year"
+  | "custom";
 const ANALYSIS_TAG_NAMES = ["Needs", "Wants", "Investments"] as const;
 type AnalysisTagName = (typeof ANALYSIS_TAG_NAMES)[number];
 const ANALYSIS_TAG_COLORS: Record<AnalysisTagName, string> = {
@@ -749,6 +755,14 @@ function getTransactionDateRange(
   if (preset === "last_month") {
     const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     return { start: startOfMonth(lastMonth), end: endOfMonth(lastMonth) };
+  }
+  if (preset === "last_3_months") {
+    const start = new Date(now.getFullYear(), now.getMonth() - 2, 1);
+    return { start: startOfMonth(start), end: endOfMonth(now) };
+  }
+  if (preset === "last_6_months") {
+    const start = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+    return { start: startOfMonth(start), end: endOfMonth(now) };
   }
   if (preset === "this_year") {
     return {
@@ -3676,6 +3690,8 @@ function DashboardShell({
                 [
                   ["this_month", "This Month"],
                   ["last_month", "Last Month"],
+                  ["last_3_months", "Last 3 Months"],
+                  ["last_6_months", "Last 6 Months"],
                   ["this_year", "This Year"],
                   ["custom", "Custom"]
                 ] as const
